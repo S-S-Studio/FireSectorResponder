@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+  <meta name="theme-color" content="#b42318">
+  <meta name="description" content="FireSector Responder">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="assets/icon-192.png">
+  <link rel="icon" href="assets/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+  <title>FireSector</title>
+</head>
+<body>
+  <section id="accessScreen" class="screen center">
+    <form id="accessForm" class="card auth-card" novalidate>
+      <div class="brand-stack">
+        <div class="logo">FS</div>
+        <div>
+          <h1>FireSector</h1>
+        </div>
+      </div>
+
+      <label>
+        Access Code
+        <input
+          id="accessCode"
+          type="text"
+          inputmode="text"
+          autocomplete="one-time-code"
+          autocapitalize="characters"
+          spellcheck="false"
+          maxlength="12"
+          placeholder="FS-ABCD-1234"
+          required
+        >
+      </label>
+
+      <div id="accessError" class="error hidden"></div>
+      <button id="accessSubmit" type="submit">Open FireSector</button>
+    </form>
+  </section>
+
+  <section id="mapScreen" class="map-screen hidden" aria-label="FireSector responder map">
+    <div id="map" class="map" role="application" aria-label="FireSector map">
+      <div id="tileLayer" class="tile-layer"></div>
+      <svg id="farmBoundaryLayer" class="farm-boundary-layer" aria-hidden="true"></svg>
+      <div id="radiusOverlay" class="radius-overlay hidden"></div>
+      <svg id="navigationLayer" class="navigation-layer" aria-hidden="true"></svg>
+      <div id="markerLayer" class="marker-layer"></div>
+      <div id="locationCone" class="location-cone hidden"></div>
+      <div id="locationDot" class="location-dot hidden"></div>
+      <div id="markerDetails" class="marker-details hidden"></div>
+
+      <div class="map-controls">
+        <button id="zoomIn" class="map-button" type="button" aria-label="Zoom in">+</button>
+        <button id="zoomOut" class="map-button" type="button" aria-label="Zoom out">−</button>
+        <button id="recenter" class="map-button map-button-icon" type="button" aria-label="Recenter on current location">⌖</button>
+      </div>
+
+      <div id="mapAttribution" class="map-attribution">© OpenStreetMap contributors</div>
+    </div>
+
+    <header class="responder-header">
+      <div class="brand compact">
+        <div class="logo small">FS</div>
+        <strong>FireSector</strong>
+      </div>
+
+      <div class="header-actions">
+        <div id="countdown" class="countdown">—</div>
+        <button id="menuButton" class="menu-button" type="button" aria-label="Open menu">☰</button>
+      </div>
+    </header>
+
+    <div id="syncBadge" class="sync-badge hidden">Offline</div>
+
+    <div id="navigationCard" class="navigation-card hidden">
+      <div>
+        <span>Nearest Water Point</span>
+        <strong id="navigationName">—</strong>
+        <small id="navigationDistance">—</small>
+      </div>
+      <button id="stopNavigation" class="icon-button" type="button" aria-label="Stop navigation">×</button>
+    </div>
+
+    <div id="menuBackdrop" class="menu-backdrop hidden"></div>
+    <aside id="menuDrawer" class="menu-drawer hidden" aria-label="FireSector menu">
+      <div class="menu-head">
+        <div>
+          <strong id="menuAreaName">FireSector</strong>
+          <span id="menuScope">—</span>
+        </div>
+        <button id="closeMenu" class="icon-button" type="button" aria-label="Close menu">×</button>
+      </div>
+
+      <button id="menuRecenter" class="menu-row" type="button">
+        <span>⌖</span>
+        <strong>Current Location</strong>
+      </button>
+      <button id="nearestWater" class="menu-row" type="button">
+        <span>◉</span>
+        <strong>Nearest Water Point</strong>
+      </button>
+      <button id="toggleMapMode" class="menu-row" type="button">
+        <span>▧</span>
+        <div>
+          <strong>Map Style</strong>
+          <small id="mapModeLabel">Terrain</small>
+        </div>
+      </button>
+      <button id="installButton" class="menu-row hidden" type="button">
+        <span>⇩</span>
+        <strong>Install FireSector</strong>
+      </button>
+      <button id="endAccess" class="menu-row danger-row" type="button">
+        <span>×</span>
+        <strong>Close Access</strong>
+      </button>
+    </aside>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>
