@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
-  <meta name="theme-color" content="#b42318">
+  <meta name="theme-color" content="#f5f7fa">
   <meta name="description" content="FireSector Responder">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="assets/icon-192.png">
@@ -12,32 +12,40 @@
   <title>FireSector</title>
 </head>
 <body>
-  <section id="accessScreen" class="screen center">
-    <form id="accessForm" class="card auth-card" novalidate>
-      <div class="brand-stack">
-        <div class="logo">FS</div>
-        <div>
-          <h1>FireSector</h1>
-        </div>
+  <section id="accessScreen" class="screen access-screen">
+    <form id="accessForm" class="access-form" novalidate>
+      <div class="access-map-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" focusable="false">
+          <path d="M3.5 6.3 8.7 4l6.6 2.1L20.5 4v13.7L15.3 20l-6.6-2.1L3.5 20V6.3Z"/>
+          <path d="M8.7 4v13.9M15.3 6.1V20"/>
+        </svg>
       </div>
+      <h1>FireSector</h1>
+      <p class="access-intro">Enter your temporary FireSector access code to open the map.</p>
 
-      <label>
-        Access Code
-        <input
-          id="accessCode"
-          type="text"
-          inputmode="text"
-          autocomplete="one-time-code"
-          autocapitalize="characters"
-          spellcheck="false"
-          maxlength="12"
-          placeholder="FS-ABCD-1234"
-          required
-        >
+      <label class="access-field">
+        <span>Access Code</span>
+        <div class="input-with-icon">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="8.5" cy="15.5" r="3.5"/>
+            <path d="m11 13 7.3-7.3M15.7 8.3l2 2M17.7 6.3l2 2"/>
+          </svg>
+          <input
+            id="accessCode"
+            type="text"
+            inputmode="text"
+            autocomplete="one-time-code"
+            autocapitalize="characters"
+            spellcheck="false"
+            maxlength="12"
+            placeholder="Enter access code"
+            required
+          >
+        </div>
       </label>
 
       <div id="accessError" class="error hidden"></div>
-      <button id="accessSubmit" type="submit">Open FireSector</button>
+      <button id="accessSubmit" class="continue-button" type="submit">Continue</button>
     </form>
   </section>
 
@@ -48,74 +56,88 @@
       <div id="radiusOverlay" class="radius-overlay hidden"></div>
       <svg id="navigationLayer" class="navigation-layer" aria-hidden="true"></svg>
       <div id="markerLayer" class="marker-layer"></div>
-      <div id="locationCone" class="location-cone hidden"></div>
+      <div id="locationCone" class="location-cone hidden" aria-hidden="true">
+        <svg viewBox="0 0 36 48" focusable="false">
+          <path d="M18 2.5 32 43 18 36.2 4 43 18 2.5Z"/>
+        </svg>
+      </div>
       <div id="locationDot" class="location-dot hidden"></div>
       <div id="markerDetails" class="marker-details hidden"></div>
-
-      <div class="map-controls">
-        <button id="zoomIn" class="map-button" type="button" aria-label="Zoom in">+</button>
-        <button id="zoomOut" class="map-button" type="button" aria-label="Zoom out">−</button>
-        <button id="recenter" class="map-button map-button-icon" type="button" aria-label="Recenter on current location">⌖</button>
+      <button id="mapInfoButton" class="map-info-button" type="button" aria-label="Map information" aria-expanded="false">
+        <span aria-hidden="true">i</span>
+      </button>
+      <div id="mapInfoPanel" class="map-info-panel hidden" role="status">
+        <span id="mapAttributionText">© OpenStreetMap contributors</span>
       </div>
-
-      <div id="mapAttribution" class="map-attribution">© OpenStreetMap contributors</div>
     </div>
 
-    <header class="responder-header">
-      <div class="brand compact">
-        <div class="logo small">FS</div>
-        <strong>FireSector</strong>
-      </div>
+    <button id="menuButton" class="floating-button menu-fab" type="button" aria-label="Open menu">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+    </button>
 
-      <div class="header-actions">
-        <div id="countdown" class="countdown">—</div>
-        <button id="menuButton" class="menu-button" type="button" aria-label="Open menu">☰</button>
-      </div>
-    </header>
+    <div class="expiry-pill" aria-live="polite">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="13" r="7.5"/>
+        <path d="M12 5.5V3M9.5 3h5M12 13V9.5M12 13l2.7 1.7"/>
+      </svg>
+      <strong>Expires in <span id="countdown">—</span></strong>
+    </div>
 
     <div id="syncBadge" class="sync-badge hidden">Offline</div>
 
+    <div class="map-action-row">
+      <button id="nearestWater" class="floating-button action-fab" type="button" aria-label="Nearest Water Point">
+        <svg class="water-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3.2c-1.4 2.7-5.3 6.7-5.3 10.6A5.3 5.3 0 0 0 12 19.1a5.3 5.3 0 0 0 5.3-5.3C17.3 9.9 13.4 5.9 12 3.2Z"/>
+        </svg>
+      </button>
+      <button id="recenter" class="floating-button action-fab" type="button" aria-label="Re-centre on my location">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="5"/>
+          <circle cx="12" cy="12" r="1.4" class="fill"/>
+          <path d="M12 2.7v3M12 18.3v3M2.7 12h3M18.3 12h3"/>
+        </svg>
+      </button>
+    </div>
+
     <div id="navigationCard" class="navigation-card hidden">
+      <div class="navigation-water-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 3.2c-1.4 2.7-5.3 6.7-5.3 10.6A5.3 5.3 0 0 0 12 19.1a5.3 5.3 0 0 0 5.3-5.3C17.3 9.9 13.4 5.9 12 3.2Z"/></svg>
+      </div>
       <div>
         <span>Nearest Water Point</span>
         <strong id="navigationName">—</strong>
         <small id="navigationDistance">—</small>
       </div>
-      <button id="stopNavigation" class="icon-button" type="button" aria-label="Stop navigation">×</button>
+      <button id="stopNavigation" class="navigation-close" type="button" aria-label="Stop navigation">×</button>
     </div>
 
     <div id="menuBackdrop" class="menu-backdrop hidden"></div>
-    <aside id="menuDrawer" class="menu-drawer hidden" aria-label="FireSector menu">
-      <div class="menu-head">
-        <div>
-          <strong id="menuAreaName">FireSector</strong>
-          <span id="menuScope">—</span>
-        </div>
-        <button id="closeMenu" class="icon-button" type="button" aria-label="Close menu">×</button>
-      </div>
+    <aside id="menuDrawer" class="menu-drawer hidden" aria-label="Emergency Map menu">
+      <div class="drawer-title">Emergency Map</div>
+      <div class="drawer-divider"></div>
+      <div class="drawer-section-title">Map View</div>
 
-      <button id="menuRecenter" class="menu-row" type="button">
-        <span>⌖</span>
-        <strong>Current Location</strong>
+      <button id="terrainView" class="map-view-row selected" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="m3.5 6.3 5.2-2.2 6.6 2.1 5.2-2.1v13.6l-5.2 2.2-6.6-2.1-5.2 2.1V6.3Z"/>
+          <path d="M8.7 4.1v13.7M15.3 6.2v13.7"/>
+        </svg>
+        <span>Terrain</span>
+        <span class="map-view-check" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" class="fill-circle"/><path d="m7.6 12.3 2.8 2.8 6-6" class="check-path"/></svg>
+        </span>
       </button>
-      <button id="nearestWater" class="menu-row" type="button">
-        <span>◉</span>
-        <strong>Nearest Water Point</strong>
-      </button>
-      <button id="toggleMapMode" class="menu-row" type="button">
-        <span>▧</span>
-        <div>
-          <strong>Map Style</strong>
-          <small id="mapModeLabel">Terrain</small>
-        </div>
-      </button>
-      <button id="installButton" class="menu-row hidden" type="button">
-        <span>⇩</span>
-        <strong>Install FireSector</strong>
-      </button>
-      <button id="endAccess" class="menu-row danger-row" type="button">
-        <span>×</span>
-        <strong>Close Access</strong>
+
+      <button id="satelliteView" class="map-view-row" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="m7.2 13.5 3.3 3.3M10 10.7l3.3 3.3M12.8 7.9l3.3 3.3M8.8 17.2l-2.2 2.2-3.9-3.9 2.2-2.2M15.2 4.2 17.4 2l3.9 3.9-2.2 2.2M10.7 16.9 16.9 10.7"/>
+          <path d="M14.8 18.8c2 .1 3.8-.6 5.2-2M5.2 9.2c-.1-2 .6-3.8 2-5.2"/>
+        </svg>
+        <span>Satellite / Hybrid</span>
+        <span class="map-view-check" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" class="fill-circle"/><path d="m7.6 12.3 2.8 2.8 6-6" class="check-path"/></svg>
+        </span>
       </button>
     </aside>
   </section>

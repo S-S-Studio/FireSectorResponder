@@ -1,4 +1,4 @@
-/* FireSector Responder PWA v001 */
+/* FireSector Responder PWA v003 */
 const SUPABASE_URL='https://gekvveymihsskkuxgxve.supabase.co';
 const SUPABASE_KEY='sb_publishable_nU5RxgAg5gq0Gr53Fb-F_w_Z6_dS3qe';
 const HEARTBEAT_BASE_MS=20000;
@@ -229,7 +229,8 @@ function tileUrl(z,x,y){
 
 function renderMap(){
   const map=$('map');
-  $('mapAttribution').textContent=mapMode==='satellite'?'Tiles © Esri':'© OpenStreetMap contributors';
+  const attribution=$('mapAttributionText');
+  if(attribution)attribution.textContent=mapMode==='satellite'?'Tiles © Esri':'© OpenStreetMap contributors';
   if(!map||map.clientWidth<10||map.clientHeight<10)return;
   const width=map.clientWidth;
   const height=map.clientHeight;
@@ -286,19 +287,33 @@ function renderRadius(left,top,z){
   overlay.classList.remove('hidden');
 }
 
+function markerIconSvg(markerType){
+  if(markerType==='water'){
+    return '<span class="pin-head"><span class="pin-core"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.8c-1.5 3-6 7.5-6 12a6 6 0 0 0 12 0c0-4.5-4.5-9-6-12Z"/><path d="M9.1 15.7c.3 1.4 1.3 2.2 2.7 2.5"/></svg></span></span>';
+  }
+  if(markerType==='gate'){
+    return '<span class="pin-head"><span class="pin-core"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4v16M5 8h3M5 16h3M8 7h11v10H8zM9 8l9 8"/></svg></span></span>';
+  }
+  if(markerType==='landmark'){
+    return '<span class="pin-head"><span class="pin-core"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v18M7 4l11 3.5-4 4.5-7-2"/></svg></span></span>';
+  }
+  return '<span class="pin-head"><span class="pin-core"><svg class="fill-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13.7 2.8c.3 2.4-.8 3.8-2.1 5.2-1.1 1.2-2.3 2.4-2.1 4.4.8-.5 1.6-1.2 2.2-2.1.2 2 1.2 3.2 2.7 4.1 1.1-1.3 1.8-2.9 1.7-4.7 2.2 1.9 3.4 4.2 3.1 6.8-.4 3.2-3.1 5.5-6.7 5.5-4 0-7-2.6-7-6.3 0-3 1.6-5.4 4.2-7.6-.2 1.7.2 2.9 1.1 3.9.1-1.8.9-3 1.7-4.1 1.2-1.6 2.3-3 1.2-5.1Z"/></svg></span></span>';
+}
+
 function renderMarkers(left,top,z,width,height){
   const layer=$('markerLayer');
   const fragment=document.createDocumentFragment();
   let selected=null;
   for(const marker of currentMarkers){
     const p=screenPoint(marker.latitude,marker.longitude,left,top,z);
-    if(p.x<-80||p.y<-80||p.x>width+80||p.y>height+80)continue;
+    if(p.x<-100||p.y<-100||p.x>width+100||p.y>height+100)continue;
     const button=document.createElement('button');
     button.type='button';
     button.className=`map-marker ${marker.markerType}${marker.id===selectedMarkerId?' selected':''}`;
     button.dataset.markerId=marker.id;
     button.style.left=`${p.x}px`;
     button.style.top=`${p.y}px`;
+    button.innerHTML=markerIconSvg(marker.markerType);
     button.setAttribute('aria-label',`${markerTypeLabel(marker.markerType)}: ${marker.name}`);
     fragment.appendChild(button);
     if(marker.id===selectedMarkerId)selected={marker,p};
@@ -320,9 +335,9 @@ function renderMarkerDetails(marker,p,width,height){
   const x=clamp(p.x,150,width-150);
   let y=p.y;
   if(y<180){
-    details.style.transform='translate(-50%,42px)';
+    details.style.transform='translate(-50%,62px)';
   }else{
-    details.style.transform='translate(-50%,calc(-100% - 38px))';
+    details.style.transform='translate(-50%,calc(-100% - 78px))';
   }
   details.style.left=`${x}px`;
   details.style.top=`${y}px`;
@@ -441,6 +456,7 @@ function initialiseMapInteractions(){
   const map=$('map');
   map.addEventListener('pointerdown',event=>{
     if(event.target.closest('button,.marker-details,.responder-header,.navigation-card'))return;
+    closeMapInfo();
     mapState.pointers.set(event.pointerId,{x:event.clientX,y:event.clientY});
     map.setPointerCapture(event.pointerId);
     if(mapState.pointers.size===1){
@@ -522,8 +538,6 @@ function initialiseMapInteractions(){
     if(event.target.closest('[data-water-nav]'))startWaterNavigation(selectedMarkerId);
   });
 
-  $('zoomIn').addEventListener('click',()=>{mapState.zoom=clamp(mapState.zoom+1,4,18);renderMap();});
-  $('zoomOut').addEventListener('click',()=>{mapState.zoom=clamp(mapState.zoom-1,4,18);renderMap();});
 }
 
 function startLocationTracking(){
@@ -640,10 +654,15 @@ function updateCountdown(){
   $('countdown').textContent=days?`${days}d ${hh}:${mm}:${ss}`:`${hh}:${mm}:${ss}`;
 }
 
+function updateMapViewSelection(){
+  const terrain=$('terrainView');
+  const satellite=$('satelliteView');
+  if(terrain)terrain.classList.toggle('selected',mapMode==='terrain');
+  if(satellite)satellite.classList.toggle('selected',mapMode==='satellite');
+}
+
 function updateMenuMeta(){
-  $('menuAreaName').textContent=activeAccess?.areaName||currentSnapshot?.districtName||'FireSector';
-  const source=currentSnapshot||activeAccess;
-  $('menuScope').textContent=source?.scopeType==='radius'?`${source.radiusKm} km radius`:'Entire area';
+  updateMapViewSelection();
 }
 
 function showOfflineBadge(show){
@@ -793,12 +812,29 @@ async function endTemporaryAccess(serverEnded=false){
 }
 
 function openMenu(){
+  closeMapInfo();
   $('menuBackdrop').classList.remove('hidden');
   $('menuDrawer').classList.remove('hidden');
 }
 function closeMenu(){
   $('menuBackdrop').classList.add('hidden');
   $('menuDrawer').classList.add('hidden');
+}
+
+function toggleMapInfo(){
+  const panel=$('mapInfoPanel');
+  const button=$('mapInfoButton');
+  if(!panel||!button)return;
+  const opening=panel.classList.contains('hidden');
+  panel.classList.toggle('hidden',!opening);
+  button.setAttribute('aria-expanded',opening?'true':'false');
+}
+
+function closeMapInfo(){
+  const panel=$('mapInfoPanel');
+  const button=$('mapInfoButton');
+  if(panel)panel.classList.add('hidden');
+  if(button)button.setAttribute('aria-expanded','false');
 }
 
 function initialiseUi(){
@@ -813,7 +849,7 @@ function initialiseUi(){
     if(!code){showAccessError('Enter a valid FireSector access code.');return;}
     const button=$('accessSubmit');
     button.disabled=true;
-    button.textContent='Opening…';
+    button.textContent='Validating...';
     showAccessError('');
     try{
       const access=await validateCode(code);
@@ -826,40 +862,39 @@ function initialiseUi(){
       showAccessError(error.message||'Could not open FireSector.');
     }finally{
       button.disabled=false;
-      button.textContent='Open FireSector';
+      button.textContent='Continue';
     }
   });
 
   $('menuButton').addEventListener('click',openMenu);
-  $('closeMenu').addEventListener('click',closeMenu);
   $('menuBackdrop').addEventListener('click',closeMenu);
   $('recenter').addEventListener('click',recenterCurrentLocation);
-  $('menuRecenter').addEventListener('click',()=>{closeMenu();recenterCurrentLocation();});
   $('nearestWater').addEventListener('click',navigateNearestWater);
+  $('mapInfoButton').addEventListener('click',event=>{event.stopPropagation();toggleMapInfo();});
   $('stopNavigation').addEventListener('click',stopWaterNavigation);
-  $('toggleMapMode').addEventListener('click',()=>{
-    mapMode=mapMode==='terrain'?'satellite':'terrain';
-    $('mapModeLabel').textContent=mapMode==='terrain'?'Terrain':'Satellite';
+  $('terrainView').addEventListener('click',()=>{
+    if(mapMode!=='terrain'){
+      mapMode='terrain';
+      renderMap();
+    }
+    updateMapViewSelection();
     closeMenu();
-    renderMap();
   });
-  $('endAccess').addEventListener('click',()=>endTemporaryAccess(false));
-  $('installButton').addEventListener('click',async()=>{
-    if(!installPrompt)return;
-    installPrompt.prompt();
-    await installPrompt.userChoice.catch(()=>null);
-    installPrompt=null;
-    $('installButton').classList.add('hidden');
+  $('satelliteView').addEventListener('click',()=>{
+    if(mapMode!=='satellite'){
+      mapMode='satellite';
+      renderMap();
+    }
+    updateMapViewSelection();
+    closeMenu();
   });
 
   window.addEventListener('beforeinstallprompt',event=>{
     event.preventDefault();
     installPrompt=event;
-    $('installButton').classList.remove('hidden');
   });
   window.addEventListener('appinstalled',()=>{
     installPrompt=null;
-    $('installButton').classList.add('hidden');
   });
   window.addEventListener('online',()=>{
     online=true;
@@ -975,13 +1010,30 @@ async function registerServiceWorker(){
   }
 }
 
+function linkedAccessCodeFromLocation(){
+  const url=new URL(window.location.href);
+  const queryCode=normaliseAccessCode(url.searchParams.get('code'));
+  if(queryCode)return queryCode;
+
+  const hashText=url.hash.replace(/^#/,'');
+  const hashParams=new URLSearchParams(hashText);
+  const hashCode=normaliseAccessCode(hashParams.get('code'));
+  if(hashCode)return hashCode;
+
+  for(const part of url.pathname.split('/').filter(Boolean).reverse()){
+    const pathCode=normaliseAccessCode(decodeURIComponent(part));
+    if(pathCode)return pathCode;
+  }
+
+  return null;
+}
+
 async function startup(){
   initialiseUi();
   initialiseMapInteractions();
   await registerServiceWorker();
 
-  const url=new URL(window.location.href);
-  const linked=normaliseAccessCode(url.searchParams.get('code'));
+  const linked=linkedAccessCodeFromLocation();
   if(linked){
     $('accessCode').value=linked;
     $('accessForm').requestSubmit();

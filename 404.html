@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>FireSector</title>
+  <script>
+    (function(){
+      var current=new URL(window.location.href);
+      var code=current.searchParams.get('code');
+      if(!code){
+        var parts=current.pathname.split('/').filter(Boolean);
+        for(var i=parts.length-1;i>=0;i--){
+          var candidate=decodeURIComponent(parts[i]||'');
+          if(/^FS[- ]?[A-Z0-9]{4}[- ]?[A-Z0-9]{4}$/i.test(candidate)){
+            code=candidate;
+            break;
+          }
+        }
+      }
+      var target=new URL('/FireSectorResponder/',current.origin);
+      if(code)target.searchParams.set('code',code);
+      window.location.replace(target.toString());
+    })();
+  </script>
+</head>
+<body></body>
+</html>

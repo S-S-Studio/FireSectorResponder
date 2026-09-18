@@ -1,6 +1,6 @@
-const APP_CACHE='firesector-responder-shell-v001';
-const TILE_CACHE='firesector-responder-tiles-v001';
-const DATA_CACHE='firesector-responder-data-v001';
+const APP_CACHE='firesector-responder-shell-v003';
+const TILE_CACHE='firesector-responder-tiles-v003';
+const DATA_CACHE='firesector-responder-data-v003';
 const MAX_TILE_ENTRIES=320;
 
 const SHELL=[
@@ -10,7 +10,8 @@ const SHELL=[
   './app.js',
   './manifest.webmanifest',
   './assets/icon-192.png',
-  './assets/icon-512.png'
+  './assets/icon-512.png',
+  './404.html'
 ];
 
 self.addEventListener('install',event=>{
@@ -49,8 +50,10 @@ self.addEventListener('fetch',event=>{
     event.respondWith(
       fetch(event.request,{cache:'no-store'})
         .then(response=>{
-          const copy=response.clone();
-          caches.open(APP_CACHE).then(cache=>cache.put(event.request,copy));
+          if(response.ok){
+            const copy=response.clone();
+            caches.open(APP_CACHE).then(cache=>cache.put(event.request,copy));
+          }
           return response;
         })
         .catch(()=>caches.match(event.request).then(r=>r||caches.match('./index.html')))
