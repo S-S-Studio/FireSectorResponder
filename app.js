@@ -1,4 +1,4 @@
-/* FireSector Responder PWA v003 */
+/* FireSector Responder PWA v004 */
 const SUPABASE_URL='https://gekvveymihsskkuxgxve.supabase.co';
 const SUPABASE_KEY='sb_publishable_nU5RxgAg5gq0Gr53Fb-F_w_Z6_dS3qe';
 const HEARTBEAT_BASE_MS=20000;
@@ -28,6 +28,10 @@ let locationWatchId=null;
 let orientationListening=false;
 let mapMode='terrain';
 let online=navigator.onLine;
+let renderFrame=0;
+let lastHeadingRenderAt=0;
+let lastWheelZoomAt=0;
+const tileNodes=new Map();
 
 const mapState={
   centerLat:-28.95,
@@ -227,7 +231,58 @@ function tileUrl(z,x,y){
   return `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
 }
 
+function scheduleRender(){
+  if(renderFrame)return;
+  renderFrame=requestAnimationFrame(()=>{
+    renderFrame=0;
+    renderMapNow();
+  });
+}
+
+function syncTiles(left,top,z,width,height){
+  const layer=$('tileLayer');
+  const minTileX=Math.floor(left/256)-1;
+  const maxTileX=Math.floor((left+width)/256)+1;
+  const minTileY=Math.floor(top/256)-1;
+  const maxTileY=Math.floor((top+height)/256)+1;
+  const tileCount=Math.pow(2,z);
+  const wanted=new Set();
+
+  for(let ty=minTileY;ty<=maxTileY;ty++){
+    if(ty<0||ty>=tileCount)continue;
+    for(let tx=minTileX;tx<=maxTileX;tx++){
+      const wrappedX=((tx%tileCount)+tileCount)%tileCount;
+      const key=`${mapMode}:${z}:${tx}:${ty}`;
+      wanted.add(key);
+      let img=tileNodes.get(key);
+      if(!img){
+        img=document.createElement('img');
+        img.className='map-tile';
+        img.alt='';
+        img.draggable=false;
+        img.decoding='async';
+        img.loading='eager';
+        img.src=tileUrl(z,wrappedX,ty);
+        tileNodes.set(key,img);
+        layer.appendChild(img);
+      }
+      img.style.transform=`translate3d(${Math.round(tx*256-left)}px,${Math.round(ty*256-top)}px,0)`;
+    }
+  }
+
+  for(const [key,img] of tileNodes){
+    if(!wanted.has(key)){
+      img.remove();
+      tileNodes.delete(key);
+    }
+  }
+}
+
 function renderMap(){
+  scheduleRender();
+}
+
+function renderMapNow(){
   const map=$('map');
   const attribution=$('mapAttributionText');
   if(attribution)attribution.textContent=mapMode==='satellite'?'Tiles © Esri':'© OpenStreetMap contributors';
@@ -238,27 +293,7 @@ function renderMap(){
   const center=latLonToWorld(mapState.centerLat,mapState.centerLon,z);
   const left=center.x-width/2;
   const top=center.y-height/2;
-  const minTileX=Math.floor(left/256);
-  const maxTileX=Math.floor((left+width)/256);
-  const minTileY=Math.floor(top/256);
-  const maxTileY=Math.floor((top+height)/256);
-  const tileCount=Math.pow(2,z);
-  const fragment=document.createDocumentFragment();
-  for(let ty=minTileY;ty<=maxTileY;ty++){
-    if(ty<0||ty>=tileCount)continue;
-    for(let tx=minTileX;tx<=maxTileX;tx++){
-      const wrappedX=((tx%tileCount)+tileCount)%tileCount;
-      const img=document.createElement('img');
-      img.className='map-tile';
-      img.alt='';
-      img.draggable=false;
-      img.src=tileUrl(z,wrappedX,ty);
-      img.style.left=`${tx*256-left}px`;
-      img.style.top=`${ty*256-top}px`;
-      fragment.appendChild(img);
-    }
-  }
-  $('tileLayer').replaceChildren(fragment);
+  syncTiles(left,top,z,width,height);
   renderRadius(left,top,z);
   renderFarmGeometry(left,top,z,width,height);
   renderMarkers(left,top,z,width,height);
@@ -513,6 +548,9 @@ function initialiseMapInteractions(){
 
   map.addEventListener('wheel',event=>{
     event.preventDefault();
+    const now=performance.now();
+    if(now-lastWheelZoomAt<110)return;
+    lastWheelZoomAt=now;
     mapState.zoom=clamp(mapState.zoom+(event.deltaY<0?1:-1),4,18);
     renderMap();
   },{passive:false});
@@ -546,14 +584,17 @@ function startLocationTracking(){
   locationWatchId=navigator.geolocation.watchPosition(position=>{
     const fresh={lat:position.coords.latitude,lon:position.coords.longitude,accuracy:position.coords.accuracy};
     const first=!currentLocation;
+    const movedKm=first?Infinity:distanceKm(currentLocation.lat,currentLocation.lon,fresh.lat,fresh.lon);
     currentLocation=fresh;
     if(first){
       mapState.centerLat=fresh.lat;
       mapState.centerLon=fresh.lon;
       mapState.zoom=Math.max(mapState.zoom,15);
+      renderMap();
+    }else if(movedKm>=0.002||navigationWaterId){
+      renderMap();
     }
-    renderMap();
-  },()=>{}, {enableHighAccuracy:true,maximumAge:3000,timeout:15000});
+  },()=>{}, {enableHighAccuracy:true,maximumAge:2500,timeout:15000});
 }
 
 async function requestCompassPermission(){
@@ -575,7 +616,12 @@ function startOrientationListener(){
     else if(Number.isFinite(event.alpha))heading=(360-event.alpha)%360;
     if(Number.isFinite(heading)){
       currentHeading=heading;
-      renderMap();
+      const now=performance.now();
+      if(now-lastHeadingRenderAt>=33){
+        lastHeadingRenderAt=now;
+        const cone=$('locationCone');
+        if(cone&&!cone.classList.contains('hidden'))cone.style.transform=`rotate(${currentHeading}deg)`;
+      }
     }
   },true);
 }

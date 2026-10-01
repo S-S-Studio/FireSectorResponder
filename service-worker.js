@@ -1,6 +1,6 @@
-const APP_CACHE='firesector-responder-shell-v003';
-const TILE_CACHE='firesector-responder-tiles-v003';
-const DATA_CACHE='firesector-responder-data-v003';
+const APP_CACHE='firesector-responder-shell-v004';
+const TILE_CACHE='firesector-responder-tiles-v004';
+const DATA_CACHE='firesector-responder-data-v004';
 const MAX_TILE_ENTRIES=320;
 
 const SHELL=[

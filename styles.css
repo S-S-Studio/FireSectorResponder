@@ -169,3 +169,10 @@ input::selection{background:#dbeafe;color:#202124}
 @media(prefers-reduced-motion:reduce){
   .map-marker.fire .pin-head::before,.location-dot::before{animation:none;opacity:.28}
 }
+
+/* v004 map performance */
+.tile-layer,.farm-boundary-layer,.navigation-layer,.marker-layer,.radius-overlay,.location-dot,.location-cone{will-change:transform}
+.map-tile{left:0!important;top:0!important;will-change:transform;backface-visibility:hidden;contain:layout paint style}
+.location-cone{width:30px;height:40px;margin-left:-15px;margin-top:-36px;transform-origin:15px 36px;filter:drop-shadow(0 2px 2px rgba(0,0,0,.25))}
+.location-cone svg{width:30px;height:40px}
+.location-cone path{fill:#1976d2;stroke:#fff;stroke-width:3;stroke-linejoin:round}
