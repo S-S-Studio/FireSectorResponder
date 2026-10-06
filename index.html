@@ -56,12 +56,14 @@
       <div id="radiusOverlay" class="radius-overlay hidden"></div>
       <svg id="navigationLayer" class="navigation-layer" aria-hidden="true"></svg>
       <div id="markerLayer" class="marker-layer"></div>
+      <div id="locationAccuracy" class="location-accuracy hidden" aria-hidden="true"></div>
       <div id="locationCone" class="location-cone hidden" aria-hidden="true">
-        <svg viewBox="0 0 30 40" focusable="false">
-          <path d="M15 2.5 26 36 15 31.2 4 36 15 2.5Z"/>
+        <svg viewBox="0 0 140 100" focusable="false">
+          <path id="locationConePath" d="M70 98 L48 8 Q70 -2 92 8 Z"/>
         </svg>
       </div>
-      <div id="locationDot" class="location-dot hidden"></div>
+      <div id="locationPulse" class="location-pulse hidden" aria-hidden="true"></div>
+      <div id="locationDot" class="location-dot hidden" aria-hidden="true"></div>
       <div id="markerDetails" class="marker-details hidden"></div>
       <button id="mapInfoButton" class="map-info-button" type="button" aria-label="Map information" aria-expanded="false">
         <span aria-hidden="true">i</span>

@@ -1,6 +1,5 @@
-const APP_CACHE='firesector-responder-shell-v004';
-const TILE_CACHE='firesector-responder-tiles-v004';
-const DATA_CACHE='firesector-responder-data-v004';
+const APP_CACHE='firesector-responder-shell-v005';
+const TILE_CACHE='firesector-responder-tiles-v005';
 const MAX_TILE_ENTRIES=320;
 
 const SHELL=[
@@ -20,7 +19,7 @@ self.addEventListener('install',event=>{
 });
 
 self.addEventListener('activate',event=>{
-  const keep=new Set([APP_CACHE,TILE_CACHE,DATA_CACHE]);
+  const keep=new Set([APP_CACHE,TILE_CACHE]);
   event.waitUntil(
     caches.keys().then(keys=>Promise.all(keys.filter(key=>!keep.has(key)).map(key=>caches.delete(key))))
   );
@@ -44,7 +43,6 @@ self.addEventListener('fetch',event=>{
     url.hostname==='tile.openstreetmap.org' ||
     url.hostname==='server.arcgisonline.com'
   );
-  const isFarmData=url.hostname==='maps.geoscience.org.za';
 
   if(sameOrigin){
     event.respondWith(
@@ -74,19 +72,4 @@ self.addEventListener('fetch',event=>{
     return;
   }
 
-  if(isFarmData){
-    event.respondWith(
-      caches.open(DATA_CACHE).then(async cache=>{
-        try{
-          const response=await fetch(event.request);
-          if(response.ok)cache.put(event.request,response.clone());
-          return response;
-        }catch(error){
-          const cached=await cache.match(event.request);
-          if(cached)return cached;
-          throw error;
-        }
-      })
-    );
-  }
 });

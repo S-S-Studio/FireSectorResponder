@@ -1,4 +1,4 @@
-/* FireSector Responder PWA v004 */
+/* FireSector Responder PWA v005 */
 const SUPABASE_URL='https://gekvveymihsskkuxgxve.supabase.co';
 const SUPABASE_KEY='sb_publishable_nU5RxgAg5gq0Gr53Fb-F_w_Z6_dS3qe';
 const HEARTBEAT_BASE_MS=20000;
@@ -19,6 +19,7 @@ let selectedMarkerId=null;
 let navigationWaterId=null;
 let currentLocation=null;
 let currentHeading=null;
+let currentHeadingAccuracy=null;
 let installPrompt=null;
 let countdownTimer=null;
 let heartbeatTimer=null;
@@ -32,6 +33,7 @@ let renderFrame=0;
 let lastHeadingRenderAt=0;
 let lastWheelZoomAt=0;
 const tileNodes=new Map();
+const markerNodes=new Map();
 
 const mapState={
   centerLat:-28.95,
@@ -46,14 +48,6 @@ const mapState={
   pinchDistance:null
 };
 
-const FARM_DEFINITIONS=[
-  {name:'Lovedale',number:'1844 RD',private:false,url:"https://maps.geoscience.org.za/hosting/rest/services/Administrative_Boundaries_and_Cadastral_Data/MapServer/20/query?where=PARCEL_NO%3D1844&geometry=25.689453%2C-28.911699&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=*&returnGeometry=true&outSR=4326&f=geojson"},
-  {name:'Dam Vallei',number:'29 RD',private:false,url:"https://maps.geoscience.org.za/hosting/rest/services/Administrative_Boundaries_and_Cadastral_Data/MapServer/20/query?where=PARCEL_NO%3D29%20AND%20MAJ_REGION%20LIKE%20%27BLOEMFONTEIN%25%27&outFields=*&returnGeometry=true&outSR=4326&f=geojson"},
-  {name:'Strydoms Pan',number:'348 RD',private:false,url:"https://maps.geoscience.org.za/hosting/rest/services/Administrative_Boundaries_and_Cadastral_Data/MapServer/20/query?where=PARCEL_NO%3D348%20AND%20MAJ_REGION%20LIKE%20%27BLOEMFONTEIN%25%27&outFields=*&returnGeometry=true&outSR=4326&f=geojson"},
-  {name:'Helder Fontein',number:'754 RD',private:false,url:"https://maps.geoscience.org.za/hosting/rest/services/Administrative_Boundaries_and_Cadastral_Data/MapServer/20/query?where=PARCEL_NO%3D754%20AND%20MAJ_REGION%20LIKE%20%27BLOEMFONTEIN%25%27&outFields=*&returnGeometry=true&outSR=4326&f=geojson"},
-  {name:'Kromdraai',number:'558 RD',private:true,url:"https://maps.geoscience.org.za/hosting/rest/services/Administrative_Boundaries_and_Cadastral_Data/MapServer/20/query?where=PARCEL_NO%3D558%20AND%20MAJ_REGION%20LIKE%20%27BLOEMFONTEIN%25%27&outFields=*&returnGeometry=true&outSR=4326&f=geojson"},
-  {name:'Rooipan',number:'686 RD',private:false,url:"https://maps.geoscience.org.za/hosting/rest/services/Administrative_Boundaries_and_Cadastral_Data/MapServer/20/query?where=PARCEL_NO%3D686%20AND%20MAJ_REGION%20LIKE%20%27BLOEMFONTEIN%25%27&outFields=*&returnGeometry=true&outSR=4326&f=geojson"}
-];
 let farmGeometry=[];
 
 function formatAccessCode(value){
@@ -169,6 +163,21 @@ function validateSnapshot(raw,access){
       updatedAt:cleanText(item.updated_at)
     };
   });
+  const farms=Array.isArray(raw.farms)
+    ?raw.farms.map(item=>{
+      const geometry=item?.boundary_geojson;
+      const type=String(geometry?.type||'');
+      if(!['Polygon','MultiPolygon'].includes(type))return null;
+      return {
+        id:String(item?.id||''),
+        name:cleanText(item?.name)||'Private farm',
+        number:[cleanText(item?.parcel_no),cleanText(item?.portion_no)].filter(Boolean).join(' / '),
+        private:item?.is_private_data===true,
+        geometry
+      };
+    }).filter(Boolean)
+    :[];
+
   return {
     accessCodeId,districtId,
     districtCode:cleanText(raw.district_code),
@@ -178,7 +187,8 @@ function validateSnapshot(raw,access){
     generatedAt:cleanText(raw.generated_at),
     scopeType,centerLatitude,centerLongitude,radiusKm,
     expiresAt:cleanText(raw.expires_at),
-    markers
+    markers,
+    farms
   };
 }
 
@@ -219,6 +229,24 @@ function worldToLatLon(x,y,zoom){
   const n=Math.PI-2*Math.PI*y/scale;
   const lat=180/Math.PI*Math.atan(Math.sinh(n));
   return {lat:clamp(lat,-85.05112878,85.05112878),lon};
+}
+
+function zoomMapAroundPointer(state,map,newZoom,event){
+  const nextZoom=clamp(newZoom,4,18);
+  if(nextZoom===state.zoom)return false;
+
+  const rect=map.getBoundingClientRect();
+  const offsetX=event.clientX-rect.left-rect.width/2;
+  const offsetY=event.clientY-rect.top-rect.height/2;
+  const oldCenter=latLonToWorld(state.centerLat,state.centerLon,state.zoom);
+  const anchor=worldToLatLon(oldCenter.x+offsetX,oldCenter.y+offsetY,state.zoom);
+  const anchorWorld=latLonToWorld(anchor.lat,anchor.lon,nextZoom);
+  const nextCenter=worldToLatLon(anchorWorld.x-offsetX,anchorWorld.y-offsetY,nextZoom);
+
+  state.zoom=nextZoom;
+  state.centerLat=nextCenter.lat;
+  state.centerLon=nextCenter.lon;
+  return true;
 }
 
 function mapRadiusPixels(lat,radiusKm,zoom){
@@ -337,23 +365,41 @@ function markerIconSvg(markerType){
 
 function renderMarkers(left,top,z,width,height){
   const layer=$('markerLayer');
-  const fragment=document.createDocumentFragment();
+  const activeIds=new Set(currentMarkers.map(marker=>marker.id));
+
+  for(const [id,node] of markerNodes){
+    if(!activeIds.has(id)){
+      node.remove();
+      markerNodes.delete(id);
+    }
+  }
+
   let selected=null;
   for(const marker of currentMarkers){
     const p=screenPoint(marker.latitude,marker.longitude,left,top,z);
-    if(p.x<-100||p.y<-100||p.x>width+100||p.y>height+100)continue;
-    const button=document.createElement('button');
-    button.type='button';
+    let button=markerNodes.get(marker.id);
+    if(!button){
+      button=document.createElement('button');
+      button.type='button';
+      button.dataset.markerId=marker.id;
+      button.innerHTML=markerIconSvg(marker.markerType);
+      markerNodes.set(marker.id,button);
+      layer.appendChild(button);
+    }
+
     button.className=`map-marker ${marker.markerType}${marker.id===selectedMarkerId?' selected':''}`;
-    button.dataset.markerId=marker.id;
-    button.style.left=`${p.x}px`;
-    button.style.top=`${p.y}px`;
-    button.innerHTML=markerIconSvg(marker.markerType);
     button.setAttribute('aria-label',`${markerTypeLabel(marker.markerType)}: ${marker.name}`);
-    fragment.appendChild(button);
-    if(marker.id===selectedMarkerId)selected={marker,p};
+
+    const visible=p.x>=-100&&p.y>=-100&&p.x<=width+100&&p.y<=height+100;
+    button.style.display=visible?'':'none';
+    if(visible){
+      button.style.left=`${p.x}px`;
+      button.style.top=`${p.y}px`;
+    }
+
+    if(visible&&marker.id===selectedMarkerId)selected={marker,p};
   }
-  layer.replaceChildren(fragment);
+
   if(selected)renderMarkerDetails(selected.marker,selected.p,width,height);
   else $('markerDetails').classList.add('hidden');
 }
@@ -384,22 +430,58 @@ function escapeHtml(value){
 }
 
 function renderCurrentLocation(left,top,z){
+  const accuracy=$('locationAccuracy');
+  const pulse=$('locationPulse');
+  const dot=$('locationDot');
+  const cone=$('locationCone');
+
   if(!currentLocation){
-    $('locationDot').classList.add('hidden');
-    $('locationCone').classList.add('hidden');
+    accuracy.classList.add('hidden');
+    pulse.classList.add('hidden');
+    dot.classList.add('hidden');
+    cone.classList.add('hidden');
     return;
   }
+
   const p=screenPoint(currentLocation.lat,currentLocation.lon,left,top,z);
-  $('locationDot').style.left=`${p.x}px`;
-  $('locationDot').style.top=`${p.y}px`;
-  $('locationDot').classList.remove('hidden');
-  if(Number.isFinite(currentHeading)){
-    $('locationCone').style.left=`${p.x}px`;
-    $('locationCone').style.top=`${p.y}px`;
-    $('locationCone').style.transform=`rotate(${currentHeading}deg)`;
-    $('locationCone').classList.remove('hidden');
+  const accuracyMetres=Number(currentLocation.accuracy);
+  const accuracyPx=Number.isFinite(accuracyMetres)&&accuracyMetres>0
+    ?mapRadiusPixels(currentLocation.lat,accuracyMetres/1000,z)
+    :0;
+
+  if(accuracyPx>0){
+    accuracy.style.left=`${p.x-accuracyPx}px`;
+    accuracy.style.top=`${p.y-accuracyPx}px`;
+    accuracy.style.width=`${accuracyPx*2}px`;
+    accuracy.style.height=`${accuracyPx*2}px`;
+    accuracy.classList.remove('hidden');
   }else{
-    $('locationCone').classList.add('hidden');
+    accuracy.classList.add('hidden');
+  }
+
+  for(const element of [pulse,dot]){
+    element.style.left=`${p.x}px`;
+    element.style.top=`${p.y}px`;
+    element.classList.remove('hidden');
+  }
+
+  if(Number.isFinite(currentHeading)){
+    const reported=Number(currentHeadingAccuracy);
+    const accuracyDegrees=Number.isFinite(reported)&&reported>=0
+      ?clamp(reported,3,70)
+      :35;
+    const halfAngle=clamp(8+accuracyDegrees*.58,10,48);
+    const halfWidth=clamp(88*Math.tan(halfAngle*Math.PI/180),18,64);
+    const path=$('locationConePath');
+    if(path){
+      path.setAttribute('d',`M70 98 L${(70-halfWidth).toFixed(1)} 8 Q70 -2 ${(70+halfWidth).toFixed(1)} 8 Z`);
+    }
+    cone.style.left=`${p.x}px`;
+    cone.style.top=`${p.y}px`;
+    cone.style.transform=`rotate(${currentHeading}deg)`;
+    cone.classList.remove('hidden');
+  }else{
+    cone.classList.add('hidden');
   }
 }
 
@@ -462,18 +544,10 @@ function renderFarmGeometry(left,top,z,width,height){
   svg.innerHTML=parts.join('');
 }
 
-async function loadFarmBoundaries(){
-  const loaded=[];
-  await Promise.all(FARM_DEFINITIONS.map(async farm=>{
-    try{
-      const response=await fetch(farm.url,{cache:'force-cache'});
-      if(!response.ok)return;
-      const json=await response.json();
-      const feature=Array.isArray(json?.features)?json.features[0]:null;
-      if(feature?.geometry)loaded.push({...farm,geometry:feature.geometry});
-    }catch(_){ }
-  }));
-  farmGeometry=loaded;
+function loadFarmBoundaries(){
+  farmGeometry=Array.isArray(currentSnapshot?.farms)
+    ?currentSnapshot.farms.filter(farm=>farm?.private===true&&farm?.geometry)
+    :[];
   renderMap();
 }
 
@@ -551,17 +625,17 @@ function initialiseMapInteractions(){
     const now=performance.now();
     if(now-lastWheelZoomAt<110)return;
     lastWheelZoomAt=now;
-    mapState.zoom=clamp(mapState.zoom+(event.deltaY<0?1:-1),4,18);
-    renderMap();
+    if(zoomMapAroundPointer(
+      mapState,
+      map,
+      mapState.zoom+(event.deltaY<0?1:-1),
+      event
+    ))renderMap();
   },{passive:false});
 
   map.addEventListener('dblclick',event=>{
     event.preventDefault();
-    const point=mapPointFromEvent(event);
-    mapState.centerLat=point.lat;
-    mapState.centerLon=point.lon;
-    mapState.zoom=clamp(mapState.zoom+1,4,18);
-    renderMap();
+    if(zoomMapAroundPointer(mapState,map,mapState.zoom+1,event))renderMap();
   });
 
   $('markerLayer').addEventListener('click',event=>{
@@ -616,6 +690,11 @@ function startOrientationListener(){
     else if(Number.isFinite(event.alpha))heading=(360-event.alpha)%360;
     if(Number.isFinite(heading)){
       currentHeading=heading;
+      if(Number.isFinite(event.webkitCompassAccuracy) && event.webkitCompassAccuracy>=0){
+        currentHeadingAccuracy=event.webkitCompassAccuracy;
+      }else{
+        currentHeadingAccuracy=event.absolute===true?18:35;
+      }
       const now=performance.now();
       if(now-lastHeadingRenderAt>=33){
         lastHeadingRenderAt=now;
@@ -626,56 +705,101 @@ function startOrientationListener(){
   },true);
 }
 
-async function recenterCurrentLocation(){
-  await requestCompassPermission();
-  startLocationTracking();
-  if(currentLocation){
-    mapState.centerLat=currentLocation.lat;
-    mapState.centerLon=currentLocation.lon;
-    mapState.zoom=Math.max(mapState.zoom,15);
-    renderMap();
-    return;
-  }
-  if(!navigator.geolocation)return;
-  navigator.geolocation.getCurrentPosition(position=>{
-    currentLocation={lat:position.coords.latitude,lon:position.coords.longitude,accuracy:position.coords.accuracy};
-    mapState.centerLat=currentLocation.lat;
-    mapState.centerLon=currentLocation.lon;
-    mapState.zoom=Math.max(mapState.zoom,15);
-    renderMap();
-  },()=>{}, {enableHighAccuracy:true,timeout:12000,maximumAge:0});
+function getCurrentPositionOnce(){
+  return new Promise(resolve=>{
+    if(!navigator.geolocation){resolve(null);return;}
+    navigator.geolocation.getCurrentPosition(
+      position=>resolve(position),
+      ()=>resolve(null),
+      {enableHighAccuracy:true,timeout:12000,maximumAge:0}
+    );
+  });
 }
 
-function startWaterNavigation(markerId){
+async function ensureCurrentLocation(){
+  startLocationTracking();
+  if(currentLocation)return currentLocation;
+  const position=await getCurrentPositionOnce();
+  if(!position)return null;
+  currentLocation={
+    lat:position.coords.latitude,
+    lon:position.coords.longitude,
+    accuracy:position.coords.accuracy
+  };
+  renderMap();
+  return currentLocation;
+}
+
+function fitMapToPoints(points,padding=100){
+  const map=$('map');
+  if(!map||points.length<2)return;
+  const width=Math.max(1,map.clientWidth-2*padding);
+  const height=Math.max(1,map.clientHeight-2*padding);
+
+  for(let zoom=18;zoom>=4;zoom--){
+    const worlds=points.map(point=>latLonToWorld(point.lat,point.lon,zoom));
+    const xs=worlds.map(point=>point.x);
+    const ys=worlds.map(point=>point.y);
+    const minX=Math.min(...xs),maxX=Math.max(...xs);
+    const minY=Math.min(...ys),maxY=Math.max(...ys);
+    if(maxX-minX<=width && maxY-minY<=height){
+      const centre=worldToLatLon((minX+maxX)/2,(minY+maxY)/2,zoom);
+      mapState.centerLat=centre.lat;
+      mapState.centerLon=centre.lon;
+      mapState.zoom=zoom;
+      return;
+    }
+  }
+}
+
+async function recenterCurrentLocation(){
+  await requestCompassPermission();
+  const location=await ensureCurrentLocation();
+  if(!location)return;
+  mapState.centerLat=location.lat;
+  mapState.centerLon=location.lon;
+  mapState.zoom=Math.max(mapState.zoom,15);
+  renderMap();
+}
+
+async function startWaterNavigation(markerId){
   const marker=currentMarkers.find(m=>m.id===markerId&&m.markerType==='water');
   if(!marker)return;
   navigationWaterId=marker.id;
   selectedMarkerId=marker.id;
   closeMenu();
-  recenterCurrentLocation();
+  const location=await ensureCurrentLocation();
+  if(location){
+    fitMapToPoints([
+      {lat:location.lat,lon:location.lon},
+      {lat:marker.latitude,lon:marker.longitude}
+    ]);
+  }
   renderMap();
 }
 
-function navigateNearestWater(){
-  if(!currentLocation){
-    closeMenu();
-    recenterCurrentLocation();
-    return;
-  }
+async function navigateNearestWater(){
+  closeMenu();
+  await requestCompassPermission();
+  const location=await ensureCurrentLocation();
+  if(!location)return;
+
   const waters=currentMarkers.filter(m=>m.markerType==='water');
   if(!waters.length)return;
+
   let nearest=waters[0];
   let best=Infinity;
   for(const water of waters){
-    const d=distanceKm(currentLocation.lat,currentLocation.lon,water.latitude,water.longitude);
+    const d=distanceKm(location.lat,location.lon,water.latitude,water.longitude);
     if(d<best){best=d;nearest=water;}
   }
+
   navigationWaterId=nearest.id;
   selectedMarkerId=nearest.id;
-  mapState.centerLat=(currentLocation.lat+nearest.latitude)/2;
-  mapState.centerLon=(currentLocation.lon+nearest.longitude)/2;
-  mapState.zoom=Math.max(mapState.zoom,13);
-  closeMenu();
+  fitMapToPoints([
+    {lat:location.lat,lon:location.lon},
+    {lat:nearest.latitude,lon:nearest.longitude}
+  ]);
   renderMap();
 }
 
@@ -750,7 +874,7 @@ function geometryDiffers(state,snapshot){
   return state.scopeType!==snapshot.scopeType||!near(state.centerLatitude,snapshot.centerLatitude)||!near(state.centerLongitude,snapshot.centerLongitude)||!near(state.radiusKm,snapshot.radiusKm);
 }
 
-async function heartbeat({force=false}={}){
+async function heartbeat({force=false,forceSnapshot=false}={}){
   if(!activeAccess||heartbeatRunning)return;
   if(!force&&Date.now()-lastHeartbeatAt<5000)return;
   heartbeatRunning=true;
@@ -778,13 +902,14 @@ async function heartbeat({force=false}={}){
     updateCountdown();
     updateMenuMeta();
 
-    const needsSnapshot=!currentSnapshot||currentSnapshot.versionNo!==state.versionNo||currentSnapshot.districtId!==state.districtId||geometryDiffers(state,currentSnapshot);
+    const needsSnapshot=forceSnapshot||!currentSnapshot||currentSnapshot.versionNo!==state.versionNo||currentSnapshot.districtId!==state.districtId||geometryDiffers(state,currentSnapshot);
     if(needsSnapshot){
       const fresh=await fetchSnapshot();
       if(fresh){
         await saveSnapshotAtomic(fresh);
         currentSnapshot=fresh;
         currentMarkers=fresh.markers;
+        farmGeometry=Array.isArray(fresh.farms)?fresh.farms.filter(farm=>farm?.private===true&&farm?.geometry):[];
         activeAccess={...activeAccess,
           areaName:fresh.districtName||activeAccess.areaName,
           scopeType:fresh.scopeType,
@@ -819,6 +944,7 @@ async function openAccess(access){
   activeAccess=access;
   currentSnapshot=await loadSnapshot(access);
   currentMarkers=currentSnapshot?.markers||[];
+  farmGeometry=Array.isArray(currentSnapshot?.farms)?currentSnapshot.farms.filter(farm=>farm?.private===true&&farm?.geometry):[];
   if(currentSnapshot){
     mapState.centerLat=currentSnapshot.scopeType==='radius'&&currentSnapshot.centerLatitude!==null?currentSnapshot.centerLatitude:mapState.centerLat;
     mapState.centerLon=currentSnapshot.scopeType==='radius'&&currentSnapshot.centerLongitude!==null?currentSnapshot.centerLongitude:mapState.centerLon;
@@ -836,7 +962,7 @@ async function openAccess(access){
   startLocationTracking();
   startOrientationListener();
   loadFarmBoundaries();
-  await heartbeat({force:true});
+  await heartbeat({force:true,forceSnapshot:true});
   scheduleHeartbeat();
 }
 
@@ -848,6 +974,9 @@ async function endTemporaryAccess(serverEnded=false){
   activeAccess=null;
   currentSnapshot=null;
   currentMarkers=[];
+  farmGeometry=[];
+  for(const node of markerNodes.values())node.remove();
+  markerNodes.clear();
   selectedMarkerId=null;
   navigationWaterId=null;
   await clearStoredState();
@@ -945,7 +1074,7 @@ function initialiseUi(){
   window.addEventListener('online',()=>{
     online=true;
     showOfflineBadge(false);
-    heartbeat({force:true});
+    heartbeat({force:true,forceSnapshot:currentMarkers.length===0});
   });
   window.addEventListener('offline',()=>{
     online=false;
@@ -959,7 +1088,7 @@ function initialiseUi(){
     }
   });
   window.addEventListener('focus',()=>{
-    if(activeAccess)heartbeat({force:true});
+    if(activeAccess)heartbeat({force:true,forceSnapshot:currentMarkers.length===0});
   });
 }
 

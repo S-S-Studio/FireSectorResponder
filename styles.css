@@ -51,8 +51,8 @@ input::selection{background:#dbeafe;color:#202124}
 .tile-layer{position:absolute;inset:0;overflow:hidden}
 .map-tile{position:absolute;width:256px;height:256px;max-width:none;user-select:none;pointer-events:none}
 .farm-boundary-layer,.navigation-layer{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
-.farm-boundary{fill:none;stroke:#0797df;stroke-width:2.2;vector-effect:non-scaling-stroke}
-.farm-boundary.private{stroke:#ed174c;stroke-width:3}
+.farm-boundary{fill:rgba(237,23,76,.035);stroke:#ed174c;stroke-width:3;vector-effect:non-scaling-stroke}
+.farm-boundary.private{fill:rgba(237,23,76,.035);stroke:#ed174c;stroke-width:3}
 .farm-label{font:700 13px system-ui,-apple-system,"Segoe UI",sans-serif;fill:#263238;paint-order:stroke;stroke:rgba(255,255,255,.9);stroke-width:3;stroke-linejoin:round}
 .navigation-line{stroke:#4285f4;stroke-width:4.5;stroke-dasharray:7 7;stroke-linecap:round;opacity:.9}
 .radius-overlay{position:absolute;border-radius:50%;background:var(--radius-fill);border:2px solid var(--radius-border);pointer-events:none;z-index:4;box-shadow:0 0 0 1px rgba(255,255,255,.18) inset}
@@ -84,12 +84,13 @@ input::selection{background:#dbeafe;color:#202124}
 .marker-details dd{margin:0;color:#3c4043;min-width:0;word-break:break-word}
 .marker-details .detail-action{width:100%;margin-top:9px;padding:10px 12px;border:0;border-radius:10px;background:var(--blue);color:#fff;font-weight:700}
 
-.location-dot{position:absolute;z-index:24;width:26px;height:26px;margin-left:-13px;margin-top:-13px;border-radius:50%;background:#4285f4;border:5px solid #fff;box-shadow:0 2px 7px rgba(0,0,0,.28);pointer-events:none}
-.location-dot::before{content:"";position:absolute;inset:-15px;border-radius:50%;background:rgba(66,133,244,.12);z-index:-1;animation:location-pulse 2s linear infinite}
-@keyframes location-pulse{0%{transform:scale(.58);opacity:.8}100%{transform:scale(1.15);opacity:0}}
-.location-cone{position:absolute;z-index:23;width:36px;height:48px;margin-left:-18px;margin-top:-43px;transform-origin:18px 43px;pointer-events:none;filter:drop-shadow(0 2px 3px rgba(0,0,0,.28))}
-.location-cone svg{display:block;width:36px;height:48px;overflow:visible}
-.location-cone path{fill:#4285f4;stroke:#fff;stroke-width:2.6;stroke-linejoin:round}
+.location-accuracy{position:absolute;z-index:20;border-radius:50%;background:rgba(66,133,244,.12);border:1.5px solid rgba(25,118,210,.42);pointer-events:none}
+.location-pulse{position:absolute;z-index:22;width:54px;height:54px;margin-left:-27px;margin-top:-27px;border-radius:50%;background:rgba(66,133,244,.18);pointer-events:none;animation:location-pulse 1.8s ease-out infinite}
+.location-dot{position:absolute;z-index:25;width:20px;height:20px;margin-left:-10px;margin-top:-10px;border-radius:50%;background:#1976d2;border:4px solid #fff;box-shadow:0 2px 7px rgba(0,0,0,.28);pointer-events:none}
+@keyframes location-pulse{0%{transform:scale(.45);opacity:.88}100%{transform:scale(1.18);opacity:0}}
+.location-cone{position:absolute;z-index:21;width:140px;height:100px;margin-left:-70px;margin-top:-98px;transform-origin:70px 98px;pointer-events:none;filter:drop-shadow(0 1px 2px rgba(0,0,0,.22))}
+.location-cone svg{display:block;width:140px;height:100px;overflow:visible}
+.location-cone path{fill:rgba(25,118,210,.22);stroke:rgba(13,71,161,.68);stroke-width:2.1;stroke-linejoin:round}
 
 /* Android top controls */
 .floating-button{border:0;background:rgba(255,255,255,.95);color:#555;display:grid;place-items:center;box-shadow:0 5px 12px rgba(0,0,0,.22);backdrop-filter:blur(8px)}
@@ -167,12 +168,10 @@ input::selection{background:#dbeafe;color:#202124}
 }
 
 @media(prefers-reduced-motion:reduce){
-  .map-marker.fire .pin-head::before,.location-dot::before{animation:none;opacity:.28}
+  .map-marker.fire .pin-head::before,.location-pulse{animation:none;opacity:.28}
 }
 
 /* v004 map performance */
-.tile-layer,.farm-boundary-layer,.navigation-layer,.marker-layer,.radius-overlay,.location-dot,.location-cone{will-change:transform}
+.tile-layer,.farm-boundary-layer,.navigation-layer,.marker-layer,.radius-overlay,.location-accuracy,.location-pulse,.location-dot,.location-cone{will-change:transform}
 .map-tile{left:0!important;top:0!important;will-change:transform;backface-visibility:hidden;contain:layout paint style}
-.location-cone{width:30px;height:40px;margin-left:-15px;margin-top:-36px;transform-origin:15px 36px;filter:drop-shadow(0 2px 2px rgba(0,0,0,.25))}
-.location-cone svg{width:30px;height:40px}
-.location-cone path{fill:#1976d2;stroke:#fff;stroke-width:3;stroke-linejoin:round}
+
