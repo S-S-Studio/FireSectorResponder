@@ -1,4 +1,4 @@
-/* FireSector Responder PWA v005 */
+/* FireSector Responder PWA v007 */
 const SUPABASE_URL='https://gekvveymihsskkuxgxve.supabase.co';
 const SUPABASE_KEY='sb_publishable_nU5RxgAg5gq0Gr53Fb-F_w_Z6_dS3qe';
 const HEARTBEAT_BASE_MS=20000;
@@ -190,6 +190,25 @@ function validateSnapshot(raw,access){
     markers,
     farms
   };
+}
+
+// Validate the canonical in-app/cache representation. Network snapshots are
+// converted once by validateSnapshot(); never parse them a second time.
+function validateStoredSnapshot(snapshot,access){
+  if(!snapshot||typeof snapshot!=='object')throw new Error('Invalid stored map snapshot.');
+  if(!snapshot.districtId||!snapshot.accessCodeId||!Number.isInteger(snapshot.versionNo)||snapshot.versionNo<0)throw new Error('Invalid stored map snapshot.');
+  if(access?.districtId&&snapshot.districtId!==access.districtId)throw new Error('Stored map does not match access.');
+  if(access?.accessCodeId&&snapshot.accessCodeId!==access.accessCodeId)throw new Error('Stored map does not match incident.');
+  if(!['district','radius'].includes(snapshot.scopeType))throw new Error('Invalid stored map scope.');
+  if(snapshot.scopeType==='radius'&&(!Number.isFinite(snapshot.centerLatitude)||!Number.isFinite(snapshot.centerLongitude)||!Number.isFinite(snapshot.radiusKm)||snapshot.radiusKm<=0))throw new Error('Invalid stored access radius.');
+  if(!Array.isArray(snapshot.markers)||!Array.isArray(snapshot.farms))throw new Error('Invalid stored map data.');
+  const ids=new Set();
+  for(const marker of snapshot.markers){
+    if(!marker||typeof marker.id!=='string'||!marker.id||ids.has(marker.id)||!['water','gate','landmark','fire'].includes(marker.markerType)||!Number.isFinite(marker.latitude)||!Number.isFinite(marker.longitude)||Math.abs(marker.latitude)>90||Math.abs(marker.longitude)>180)throw new Error('Invalid stored marker.');
+    ids.add(marker.id);
+    if(snapshot.scopeType==='radius'&&distanceKm(snapshot.centerLatitude,snapshot.centerLongitude,marker.latitude,marker.longitude)>snapshot.radiusKm+0.01)throw new Error('Stored marker outside access radius.');
+  }
+  return snapshot;
 }
 
 function cleanText(value){
@@ -1142,10 +1161,10 @@ async function saveSession(access){
 
 async function saveSnapshotAtomic(snapshot){
   const payload={schema:1,savedAt:new Date().toISOString(),snapshot};
-  validateSnapshot(snapshot,activeAccess);
+  validateStoredSnapshot(snapshot,activeAccess);
   await dbPut('snapshot-pending',payload);
   const verify=await dbGet('snapshot-pending');
-  validateSnapshot(verify?.snapshot,activeAccess);
+  validateStoredSnapshot(verify?.snapshot,activeAccess);
   await dbPut('active-snapshot',verify);
   await dbDelete('snapshot-pending');
 }
@@ -1154,7 +1173,7 @@ async function loadSnapshot(access){
   try{
     const stored=await dbGet('active-snapshot');
     if(!stored?.snapshot)return null;
-    return validateSnapshot(stored.snapshot,access);
+    return validateStoredSnapshot(stored.snapshot,access);
   }catch(_){return null;}
 }
 
