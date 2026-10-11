@@ -1,4 +1,4 @@
-/* FireSector Responder PWA v007 */
+/* FireSector Responder PWA v008 */
 const SUPABASE_URL='https://gekvveymihsskkuxgxve.supabase.co';
 const SUPABASE_KEY='sb_publishable_nU5RxgAg5gq0Gr53Fb-F_w_Z6_dS3qe';
 const HEARTBEAT_BASE_MS=20000;
@@ -31,7 +31,8 @@ let mapMode='terrain';
 let online=navigator.onLine;
 let renderFrame=0;
 let lastHeadingRenderAt=0;
-let lastWheelZoomAt=0;
+let mapAnimationFrame=0;
+let mapAnimationToken=0;
 const tileNodes=new Map();
 const markerNodes=new Map();
 
@@ -288,41 +289,60 @@ function scheduleRender(){
 
 function syncTiles(left,top,z,width,height){
   const layer=$('tileLayer');
-  const minTileX=Math.floor(left/256)-1;
-  const maxTileX=Math.floor((left+width)/256)+1;
-  const minTileY=Math.floor(top/256)-1;
-  const maxTileY=Math.floor((top+height)/256)+1;
-  const tileCount=Math.pow(2,z);
+  // Fractional map zoom uses native integer tiles, scaled smoothly in screen space.
+  const tileZoom=Math.floor(z);
+  const tileScale=Math.pow(2,z-tileZoom);
+  const tileSize=256*tileScale;
+  const minTileX=Math.floor(left/tileSize)-1;
+  const maxTileX=Math.floor((left+width)/tileSize)+1;
+  const minTileY=Math.floor(top/tileSize)-1;
+  const maxTileY=Math.floor((top+height)/tileSize)+1;
+  const tileCount=Math.pow(2,tileZoom);
   const wanted=new Set();
-
   for(let ty=minTileY;ty<=maxTileY;ty++){
     if(ty<0||ty>=tileCount)continue;
     for(let tx=minTileX;tx<=maxTileX;tx++){
       const wrappedX=((tx%tileCount)+tileCount)%tileCount;
-      const key=`${mapMode}:${z}:${tx}:${ty}`;
+      const key=`${mapMode}:${tileZoom}:${tx}:${ty}`;
       wanted.add(key);
       let img=tileNodes.get(key);
       if(!img){
         img=document.createElement('img');
-        img.className='map-tile';
-        img.alt='';
-        img.draggable=false;
-        img.decoding='async';
-        img.loading='eager';
-        img.src=tileUrl(z,wrappedX,ty);
-        tileNodes.set(key,img);
-        layer.appendChild(img);
+        img.className='map-tile';img.alt='';img.draggable=false;
+        img.decoding='async';img.loading='eager';
+        img.src=tileUrl(tileZoom,wrappedX,ty);
+        tileNodes.set(key,img);layer.appendChild(img);
       }
-      img.style.transform=`translate3d(${Math.round(tx*256-left)}px,${Math.round(ty*256-top)}px,0)`;
+      img.style.transform=`translate3d(${tx*tileSize-left}px,${ty*tileSize-top}px,0) scale(${tileScale})`;
     }
   }
+  for(const [key,img] of tileNodes){if(!wanted.has(key)){img.remove();tileNodes.delete(key);}}
+}
 
-  for(const [key,img] of tileNodes){
-    if(!wanted.has(key)){
-      img.remove();
-      tileNodes.delete(key);
-    }
+function animateMapTo(targetLat,targetLon,targetZoom=mapState.zoom,duration=340){
+  const token=++mapAnimationToken;
+  if(mapAnimationFrame)cancelAnimationFrame(mapAnimationFrame);
+  const fromZoom=mapState.zoom;
+  const from=latLonToWorld(mapState.centerLat,mapState.centerLon,fromZoom);
+  const to=latLonToWorld(targetLat,targetLon,fromZoom);
+  const start=performance.now();
+  function frame(now){
+    if(token!==mapAnimationToken)return;
+    const t=clamp((now-start)/duration,0,1);
+    const ease=t*t*(3-2*t);
+    const center=worldToLatLon(from.x+(to.x-from.x)*ease,from.y+(to.y-from.y)*ease,fromZoom);
+    mapState.centerLat=center.lat;mapState.centerLon=center.lon;
+    mapState.zoom=fromZoom+(targetZoom-fromZoom)*ease;
+    renderMap();
+    if(t<1)mapAnimationFrame=requestAnimationFrame(frame);
+    else mapAnimationFrame=0;
   }
+  mapAnimationFrame=requestAnimationFrame(frame);
+}
+function stopMapAnimation(){
+  ++mapAnimationToken;
+  if(mapAnimationFrame)cancelAnimationFrame(mapAnimationFrame);
+  mapAnimationFrame=0;
 }
 
 function renderMap(){
@@ -407,6 +427,9 @@ function renderMarkers(left,top,z,width,height){
     }
 
     button.className=`map-marker ${marker.markerType}${marker.id===selectedMarkerId?' selected':''}`;
+    // Scale logarithmically with map zoom: half the perceived zoom rate, bounded for visibility.
+    const scale=clamp(Math.pow(2,(z-15)/2),.52,1.18);
+    button.style.transform=`translate(-50%,-100%) scale(${scale})`;
     button.setAttribute('aria-label',`${markerTypeLabel(marker.markerType)}: ${marker.name}`);
 
     const visible=p.x>=-100&&p.y>=-100&&p.x<=width+100&&p.y<=height+100;
@@ -432,15 +455,9 @@ function renderMarkerDetails(marker,p,width,height){
   if(marker.farmName)rows.push(['Farm',marker.farmName]);
   if(marker.notes)rows.push(['Notes',marker.notes]);
   details.innerHTML=`<strong>${escapeHtml(marker.name)}</strong><dl>${rows.map(([k,v])=>`<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join('')}</dl>${marker.markerType==='water'?'<button class="detail-action" type="button" data-water-nav="1">Navigate</button>':''}`;
-  const x=clamp(p.x,150,width-150);
-  let y=p.y;
-  if(y<180){
-    details.style.transform='translate(-50%,62px)';
-  }else{
-    details.style.transform='translate(-50%,calc(-100% - 78px))';
-  }
-  details.style.left=`${x}px`;
-  details.style.top=`${y}px`;
+  details.style.transform='translate(-50%,calc(-100% - 18px))';
+  details.style.left=`${p.x}px`;
+  details.style.top=`${p.y}px`;
   details.classList.remove('hidden');
 }
 
@@ -489,11 +506,11 @@ function renderCurrentLocation(left,top,z){
     const accuracyDegrees=Number.isFinite(reported)&&reported>=0
       ?clamp(reported,3,70)
       :35;
-    const halfAngle=clamp(8+accuracyDegrees*.58,10,48);
-    const halfWidth=clamp(88*Math.tan(halfAngle*Math.PI/180),18,64);
+    const halfAngle=clamp(9+accuracyDegrees*.48,11,43);
+    const halfWidth=clamp(37*Math.tan(halfAngle*Math.PI/180),9,35);
     const path=$('locationConePath');
     if(path){
-      path.setAttribute('d',`M70 98 L${(70-halfWidth).toFixed(1)} 8 Q70 -2 ${(70+halfWidth).toFixed(1)} 8 Z`);
+      path.setAttribute('d',`M50 50 L${(50-halfWidth).toFixed(1)} 13 Q50 6 ${(50+halfWidth).toFixed(1)} 13 Z`);
     }
     cone.style.left=`${p.x}px`;
     cone.style.top=`${p.y}px`;
@@ -584,6 +601,7 @@ function initialiseMapInteractions(){
   const map=$('map');
   map.addEventListener('pointerdown',event=>{
     if(event.target.closest('button,.marker-details,.responder-header,.navigation-card'))return;
+    stopMapAnimation();
     closeMapInfo();
     mapState.pointers.set(event.pointerId,{x:event.clientX,y:event.clientY});
     map.setPointerCapture(event.pointerId);
@@ -606,8 +624,8 @@ function initialiseMapInteractions(){
     if(mapState.pointers.size===2){
       const pts=[...mapState.pointers.values()];
       const dist=Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y);
-      if(mapState.pinchDistance&&Math.abs(dist-mapState.pinchDistance)>45){
-        mapState.zoom=clamp(mapState.zoom+(dist>mapState.pinchDistance?1:-1),4,18);
+      if(mapState.pinchDistance&&Math.abs(dist-mapState.pinchDistance)>1){
+        mapState.zoom=clamp(mapState.zoom+Math.log2(dist/mapState.pinchDistance),4,18);
         mapState.pinchDistance=dist;
         mapState.startCenterWorld=latLonToWorld(mapState.centerLat,mapState.centerLon,mapState.zoom);
         renderMap();
@@ -641,20 +659,14 @@ function initialiseMapInteractions(){
 
   map.addEventListener('wheel',event=>{
     event.preventDefault();
-    const now=performance.now();
-    if(now-lastWheelZoomAt<110)return;
-    lastWheelZoomAt=now;
-    if(zoomMapAroundPointer(
-      mapState,
-      map,
-      mapState.zoom+(event.deltaY<0?1:-1),
-      event
-    ))renderMap();
+    stopMapAnimation();
+    const delta=event.deltaMode===1?event.deltaY*16:event.deltaMode===2?event.deltaY*100:event.deltaY;
+    if(zoomMapAroundPointer(mapState,map,mapState.zoom-clamp(delta,-200,200)*.003,event))renderMap();
   },{passive:false});
 
   map.addEventListener('dblclick',event=>{
     event.preventDefault();
-    if(zoomMapAroundPointer(mapState,map,mapState.zoom+1,event))renderMap();
+    if(zoomMapAroundPointer(mapState,map,mapState.zoom+.65,event))renderMap();
   });
 
   $('markerLayer').addEventListener('click',event=>{
@@ -662,7 +674,9 @@ function initialiseMapInteractions(){
     if(!button)return;
     event.stopPropagation();
     selectedMarkerId=button.dataset.markerId||null;
-    renderMap();
+    const marker=currentMarkers.find(item=>item.id===selectedMarkerId);
+    if(marker)animateMapTo(marker.latitude,marker.longitude);
+    else renderMap();
   });
 
   $('markerDetails').addEventListener('click',event=>{
