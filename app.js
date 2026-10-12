@@ -1,8 +1,8 @@
-/* FireSector Responder PWA v008 */
+/* FireSector Responder PWA v009 */
 const SUPABASE_URL='https://gekvveymihsskkuxgxve.supabase.co';
 const SUPABASE_KEY='sb_publishable_nU5RxgAg5gq0Gr53Fb-F_w_Z6_dS3qe';
-const HEARTBEAT_BASE_MS=20000;
-const HEARTBEAT_JITTER_MS=5000;
+const HEARTBEAT_BASE_MS=8000;
+const HEARTBEAT_JITTER_MS=750;
 const REQUEST_TIMEOUT_MS=10000;
 const DB_NAME='firesector_responder';
 const DB_VERSION=1;
@@ -33,6 +33,11 @@ let renderFrame=0;
 let lastHeadingRenderAt=0;
 let mapAnimationFrame=0;
 let mapAnimationToken=0;
+let wheelZoomFrame=0;
+let wheelTargetZoom=null;
+let wheelPointer=null;
+let popupReady=false;
+let popupContentKey=null;
 const tileNodes=new Map();
 const markerNodes=new Map();
 
@@ -46,7 +51,7 @@ const mapState={
   startX:0,
   startY:0,
   startCenterWorld:null,
-  pinchDistance:null
+  pinchOrigin:null
 };
 
 let farmGeometry=[];
@@ -289,10 +294,10 @@ function scheduleRender(){
 
 function syncTiles(left,top,z,width,height){
   const layer=$('tileLayer');
-  // Fractional map zoom uses native integer tiles, scaled smoothly in screen space.
-  const tileZoom=Math.floor(z);
-  const tileScale=Math.pow(2,z-tileZoom);
-  const tileSize=256*tileScale;
+  // Keep tiles in a single continuous Mercator world-pixel coordinate system.
+  // Use the closest tile resolution instead of magnifying an integer level 2x.
+  const tileZoom=Math.round(z);
+  const tileSize=256*Math.pow(2,z-tileZoom);
   const minTileX=Math.floor(left/tileSize)-1;
   const maxTileX=Math.floor((left+width)/tileSize)+1;
   const minTileY=Math.floor(top/tileSize)-1;
@@ -305,44 +310,112 @@ function syncTiles(left,top,z,width,height){
       const wrappedX=((tx%tileCount)+tileCount)%tileCount;
       const key=`${mapMode}:${tileZoom}:${tx}:${ty}`;
       wanted.add(key);
-      let img=tileNodes.get(key);
-      if(!img){
-        img=document.createElement('img');
+      let tile=tileNodes.get(key);
+      if(!tile){
+        const img=document.createElement('img');
         img.className='map-tile';img.alt='';img.draggable=false;
         img.decoding='async';img.loading='eager';
+        tile={img,z:tileZoom,x:tx,y:ty,mode:mapMode,loaded:false};
+        tileNodes.set(key,tile);
+        layer.appendChild(img);
+        img.addEventListener('load',()=>{
+          tile.loaded=true;
+          if(tileNodes.has(key))renderMap();
+        },{once:true});
         img.src=tileUrl(tileZoom,wrappedX,ty);
-        tileNodes.set(key,img);layer.appendChild(img);
       }
-      img.style.transform=`translate3d(${tx*tileSize-left}px,${ty*tileSize-top}px,0) scale(${tileScale})`;
     }
   }
-  for(const [key,img] of tileNodes){if(!wanted.has(key)){img.remove();tileNodes.delete(key);}}
+  const ready=[...wanted].every(key=>tileNodes.get(key)?.loaded);
+  for(const [key,tile] of tileNodes){
+    // At tile-level boundaries, keep previous tiles positioned at exactly
+    // the current floating zoom until every replacement tile is ready.
+    // This prevents blank screens/flicker when zooming on a slow connection.
+    const currentTileSize=256*Math.pow(2,z-tile.z);
+    const x=tile.x*currentTileSize-left;
+    const y=tile.y*currentTileSize-top;
+    const nearViewport=x<width+currentTileSize&&x+currentTileSize>-currentTileSize
+      &&y<height+currentTileSize&&y+currentTileSize>-currentTileSize;
+    const keep=tile.mode===mapMode&&(wanted.has(key)
+      ||(!ready&&tile.z!==tileZoom&&Math.abs(tile.z-tileZoom)<=1&&nearViewport));
+    if(!keep){
+      tile.img.remove();tileNodes.delete(key);continue;
+    }
+    tile.img.style.transform=`translate3d(${x}px,${y}px,0) scale(${currentTileSize/256})`;
+    tile.img.style.zIndex=tile.z===tileZoom?'1':'0';
+  }
 }
 
-function animateMapTo(targetLat,targetLon,targetZoom=mapState.zoom,duration=340){
-  const token=++mapAnimationToken;
-  if(mapAnimationFrame)cancelAnimationFrame(mapAnimationFrame);
-  const fromZoom=mapState.zoom;
-  const from=latLonToWorld(mapState.centerLat,mapState.centerLon,fromZoom);
-  const to=latLonToWorld(targetLat,targetLon,fromZoom);
-  const start=performance.now();
-  function frame(now){
-    if(token!==mapAnimationToken)return;
-    const t=clamp((now-start)/duration,0,1);
-    const ease=t*t*(3-2*t);
-    const center=worldToLatLon(from.x+(to.x-from.x)*ease,from.y+(to.y-from.y)*ease,fromZoom);
-    mapState.centerLat=center.lat;mapState.centerLon=center.lon;
-    mapState.zoom=fromZoom+(targetZoom-fromZoom)*ease;
-    renderMap();
-    if(t<1)mapAnimationFrame=requestAnimationFrame(frame);
-    else mapAnimationFrame=0;
-  }
-  mapAnimationFrame=requestAnimationFrame(frame);
-}
 function stopMapAnimation(){
   ++mapAnimationToken;
   if(mapAnimationFrame)cancelAnimationFrame(mapAnimationFrame);
   mapAnimationFrame=0;
+  if(wheelZoomFrame)cancelAnimationFrame(wheelZoomFrame);
+  wheelZoomFrame=0;
+  wheelTargetZoom=null;
+  wheelPointer=null;
+}
+
+function hideMarkerPopup(clearSelection=false){
+  popupReady=false;
+  popupContentKey=null;
+  $('markerDetails').classList.add('hidden');
+  if(clearSelection)selectedMarkerId=null;
+}
+
+function animateMapTo(targetLat,targetLon,duration=300){
+  stopMapAnimation();
+  hideMarkerPopup();
+  const token=++mapAnimationToken;
+  const z=mapState.zoom;
+  const from=latLonToWorld(mapState.centerLat,mapState.centerLon,z);
+  const to=latLonToWorld(targetLat,targetLon,z);
+  const start=performance.now();
+  function frame(now){
+    if(token!==mapAnimationToken)return;
+    const t=clamp((now-start)/duration,0,1);
+    const ease=1-Math.pow(1-t,3);
+    const centre=worldToLatLon(from.x+(to.x-from.x)*ease,from.y+(to.y-from.y)*ease,z);
+    mapState.centerLat=centre.lat;
+    mapState.centerLon=centre.lon;
+    if(t<1){
+      renderMap();
+      mapAnimationFrame=requestAnimationFrame(frame);
+    }else{
+      mapState.centerLat=targetLat;
+      mapState.centerLon=targetLon;
+      mapAnimationFrame=0;
+      popupReady=true;
+      renderMap();
+    }
+  }
+  mapAnimationFrame=requestAnimationFrame(frame);
+}
+
+function smoothZoomAtPointer(delta,event){
+  const map=$('map');
+  // Accumulate wheel input but animate every rendered frame; small trackpad
+  // deltas stay small while conventional mouse-wheel notches feel controlled.
+  const base=wheelTargetZoom===null?mapState.zoom:wheelTargetZoom;
+  wheelTargetZoom=clamp(base-delta*.0025,4,18);
+  wheelPointer={clientX:event.clientX,clientY:event.clientY};
+  if(wheelZoomFrame)return;
+  function frame(){
+    wheelZoomFrame=0;
+    if(wheelTargetZoom===null||!wheelPointer)return;
+    const difference=wheelTargetZoom-mapState.zoom;
+    if(Math.abs(difference)<=.002){
+      zoomMapAroundPointer(mapState,map,wheelTargetZoom,wheelPointer);
+      wheelTargetZoom=null;
+      wheelPointer=null;
+      renderMap();
+      return;
+    }
+    zoomMapAroundPointer(mapState,map,mapState.zoom+difference*.27,wheelPointer);
+    renderMap();
+    wheelZoomFrame=requestAnimationFrame(frame);
+  }
+  wheelZoomFrame=requestAnimationFrame(frame);
 }
 
 function renderMap(){
@@ -402,18 +475,21 @@ function markerIconSvg(markerType){
   return '<span class="pin-head"><span class="pin-core"><svg class="fill-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13.7 2.8c.3 2.4-.8 3.8-2.1 5.2-1.1 1.2-2.3 2.4-2.1 4.4.8-.5 1.6-1.2 2.2-2.1.2 2 1.2 3.2 2.7 4.1 1.1-1.3 1.8-2.9 1.7-4.7 2.2 1.9 3.4 4.2 3.1 6.8-.4 3.2-3.1 5.5-6.7 5.5-4 0-7-2.6-7-6.3 0-3 1.6-5.4 4.2-7.6-.2 1.7.2 2.9 1.1 3.9.1-1.8.9-3 1.7-4.1 1.2-1.6 2.3-3 1.2-5.1Z"/></svg></span></span>';
 }
 
+function markerScale(zoom){
+  // Zooming out halves the marker's scaling rate relative to map geometry.
+  return clamp(Math.pow(2,(zoom-15)/2),.54,1.18);
+}
+
 function renderMarkers(left,top,z,width,height){
   const layer=$('markerLayer');
   const activeIds=new Set(currentMarkers.map(marker=>marker.id));
-
   for(const [id,node] of markerNodes){
     if(!activeIds.has(id)){
-      node.remove();
-      markerNodes.delete(id);
+      node.remove();markerNodes.delete(id);
     }
   }
-
   let selected=null;
+  const scale=markerScale(z);
   for(const marker of currentMarkers){
     const p=screenPoint(marker.latitude,marker.longitude,left,top,z);
     let button=markerNodes.get(marker.id);
@@ -425,28 +501,19 @@ function renderMarkers(left,top,z,width,height){
       markerNodes.set(marker.id,button);
       layer.appendChild(button);
     }
-
     button.className=`map-marker ${marker.markerType}${marker.id===selectedMarkerId?' selected':''}`;
-    // Scale logarithmically with map zoom: half the perceived zoom rate, bounded for visibility.
-    const scale=clamp(Math.pow(2,(z-15)/2),.52,1.18);
     button.style.transform=`translate(-50%,-100%) scale(${scale})`;
     button.setAttribute('aria-label',`${markerTypeLabel(marker.markerType)}: ${marker.name}`);
-
     const visible=p.x>=-100&&p.y>=-100&&p.x<=width+100&&p.y<=height+100;
     button.style.display=visible?'':'none';
-    if(visible){
-      button.style.left=`${p.x}px`;
-      button.style.top=`${p.y}px`;
-    }
-
+    if(visible){button.style.left=`${p.x}px`;button.style.top=`${p.y}px`;}
     if(visible&&marker.id===selectedMarkerId)selected={marker,p};
   }
-
-  if(selected)renderMarkerDetails(selected.marker,selected.p,width,height);
+  if(selected&&popupReady)renderMarkerDetails(selected.marker,selected.p,scale);
   else $('markerDetails').classList.add('hidden');
 }
 
-function renderMarkerDetails(marker,p,width,height){
+function renderMarkerDetails(marker,p,scale){
   const details=$('markerDetails');
   const rows=[];
   if(marker.subtype)rows.push(['Type',marker.subtype]);
@@ -454,10 +521,22 @@ function renderMarkerDetails(marker,p,width,height){
   if(marker.availability)rows.push(['Availability',marker.availability]);
   if(marker.farmName)rows.push(['Farm',marker.farmName]);
   if(marker.notes)rows.push(['Notes',marker.notes]);
-  details.innerHTML=`<strong>${escapeHtml(marker.name)}</strong><dl>${rows.map(([k,v])=>`<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join('')}</dl>${marker.markerType==='water'?'<button class="detail-action" type="button" data-water-nav="1">Navigate</button>':''}`;
-  details.style.transform='translate(-50%,calc(-100% - 18px))';
+  const contentKey=JSON.stringify([marker.id,marker.name,rows]);
+  if(contentKey!==popupContentKey){
+    // DOM changes only when content really changes. Do not rebuild during pan,
+    // zoom or heartbeat: rebuilding was making the popup resize/jump.
+    details.innerHTML=`<strong>${escapeHtml(marker.name)}</strong><dl>${rows.map(([k,v])=>`<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join('')}</dl>`;
+    popupContentKey=contentKey;
+  }
+  // Pin tip is at p.y; place popup entirely ABOVE the pin head, including
+  // the taller Fire Point pin. Never switch popup to below the marker.
+  const pinHeight=(marker.markerType==='fire'?92:74)*scale;
+  const popupBottom=p.y-pinHeight-10;
+  // On short screens exceptionally long notes may scroll inside the card,
+  // rather than letting the top of the card disappear behind the map header.
+  details.style.maxHeight=`${Math.min(380,Math.max(72,popupBottom-68))}px`;
   details.style.left=`${p.x}px`;
-  details.style.top=`${p.y}px`;
+  details.style.top=`${popupBottom}px`;
   details.classList.remove('hidden');
 }
 
@@ -469,56 +548,41 @@ function renderCurrentLocation(left,top,z){
   const accuracy=$('locationAccuracy');
   const pulse=$('locationPulse');
   const dot=$('locationDot');
-  const cone=$('locationCone');
-
+  const bearing=$('locationBearing');
   if(!currentLocation){
-    accuracy.classList.add('hidden');
-    pulse.classList.add('hidden');
-    dot.classList.add('hidden');
-    cone.classList.add('hidden');
+    for(const element of [accuracy,pulse,dot,bearing])element.classList.add('hidden');
     return;
   }
-
   const p=screenPoint(currentLocation.lat,currentLocation.lon,left,top,z);
-  const accuracyMetres=Number(currentLocation.accuracy);
+  const accuracyMetres=currentLocation.accuracy;
   const accuracyPx=Number.isFinite(accuracyMetres)&&accuracyMetres>0
-    ?mapRadiusPixels(currentLocation.lat,accuracyMetres/1000,z)
-    :0;
-
+    ?mapRadiusPixels(currentLocation.lat,accuracyMetres/1000,z):0;
   if(accuracyPx>0){
     accuracy.style.left=`${p.x-accuracyPx}px`;
     accuracy.style.top=`${p.y-accuracyPx}px`;
     accuracy.style.width=`${accuracyPx*2}px`;
     accuracy.style.height=`${accuracyPx*2}px`;
     accuracy.classList.remove('hidden');
-  }else{
-    accuracy.classList.add('hidden');
-  }
-
+  }else accuracy.classList.add('hidden');
   for(const element of [pulse,dot]){
     element.style.left=`${p.x}px`;
     element.style.top=`${p.y}px`;
     element.classList.remove('hidden');
   }
-
   if(Number.isFinite(currentHeading)){
-    const reported=Number(currentHeadingAccuracy);
-    const accuracyDegrees=Number.isFinite(reported)&&reported>=0
-      ?clamp(reported,3,70)
-      :35;
-    const halfAngle=clamp(9+accuracyDegrees*.48,11,43);
-    const halfWidth=clamp(37*Math.tan(halfAngle*Math.PI/180),9,35);
-    const path=$('locationConePath');
-    if(path){
-      path.setAttribute('d',`M50 50 L${(50-halfWidth).toFixed(1)} 13 Q50 6 ${(50+halfWidth).toFixed(1)} 13 Z`);
-    }
-    cone.style.left=`${p.x}px`;
-    cone.style.top=`${p.y}px`;
-    cone.style.transform=`rotate(${currentHeading}deg)`;
-    cone.classList.remove('hidden');
-  }else{
-    cone.classList.add('hidden');
-  }
+    // No reported compass accuracy? Use a neutral fixed-width fan, not a
+    // made-up accuracy value. Reported degrees control its angular width.
+    const hasAccuracy=Number.isFinite(currentHeadingAccuracy)&&currentHeadingAccuracy>=0;
+    const halfAngle=hasAccuracy?clamp(currentHeadingAccuracy,10,55):23;
+    const outerRadius=26; // deliberately short: screenshot-style indicator
+    const halfWidth=clamp(Math.tan(toRad(halfAngle))*outerRadius,5,23);
+    const path=$('locationBearingPath');
+    path.setAttribute('d',`M50 50 L${(50-halfWidth).toFixed(2)} 27 Q50 20 ${(50+halfWidth).toFixed(2)} 27 Z`);
+    bearing.style.left=`${p.x}px`;
+    bearing.style.top=`${p.y}px`;
+    bearing.style.transform=`translate(-50%,-50%) rotate(${currentHeading}deg)`;
+    bearing.classList.remove('hidden');
+  }else bearing.classList.add('hidden');
 }
 
 function renderNavigation(left,top,z){
@@ -602,6 +666,7 @@ function initialiseMapInteractions(){
   map.addEventListener('pointerdown',event=>{
     if(event.target.closest('button,.marker-details,.responder-header,.navigation-card'))return;
     stopMapAnimation();
+    hideMarkerPopup(true);
     closeMapInfo();
     mapState.pointers.set(event.pointerId,{x:event.clientX,y:event.clientY});
     map.setPointerCapture(event.pointerId);
@@ -614,25 +679,40 @@ function initialiseMapInteractions(){
       map.classList.add('dragging');
     }else if(mapState.pointers.size===2){
       const pts=[...mapState.pointers.values()];
-      mapState.pinchDistance=Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y);
+      const midX=(pts[0].x+pts[1].x)/2;
+      const midY=(pts[0].y+pts[1].y)/2;
+      const rect=map.getBoundingClientRect();
+      const centre=latLonToWorld(mapState.centerLat,mapState.centerLon,mapState.zoom);
+      mapState.pinchOrigin={
+        distance:Math.max(1,Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y)),
+        zoom:mapState.zoom,
+        anchor:worldToLatLon(centre.x+midX-rect.left-rect.width/2,
+                             centre.y+midY-rect.top-rect.height/2,mapState.zoom)
+      };
+      mapState.dragging=false;
     }
   });
 
   map.addEventListener('pointermove',event=>{
     if(!mapState.pointers.has(event.pointerId))return;
     mapState.pointers.set(event.pointerId,{x:event.clientX,y:event.clientY});
-    if(mapState.pointers.size===2){
+    if(mapState.pointers.size===2&&mapState.pinchOrigin){
       const pts=[...mapState.pointers.values()];
-      const dist=Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y);
-      if(mapState.pinchDistance&&Math.abs(dist-mapState.pinchDistance)>1){
-        mapState.zoom=clamp(mapState.zoom+Math.log2(dist/mapState.pinchDistance),4,18);
-        mapState.pinchDistance=dist;
-        mapState.startCenterWorld=latLonToWorld(mapState.centerLat,mapState.centerLon,mapState.zoom);
-        renderMap();
-      }
+      const dist=Math.max(1,Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y));
+      const midX=(pts[0].x+pts[1].x)/2;
+      const midY=(pts[0].y+pts[1].y)/2;
+      const zoom=clamp(mapState.pinchOrigin.zoom+Math.log2(dist/mapState.pinchOrigin.distance),4,18);
+      const anchor=latLonToWorld(mapState.pinchOrigin.anchor.lat,mapState.pinchOrigin.anchor.lon,zoom);
+      const rect=map.getBoundingClientRect();
+      const centre=worldToLatLon(anchor.x-(midX-rect.left-rect.width/2),
+                                 anchor.y-(midY-rect.top-rect.height/2),zoom);
+      mapState.zoom=zoom;
+      mapState.centerLat=centre.lat;
+      mapState.centerLon=centre.lon;
+      renderMap();
       return;
     }
-    if(!mapState.dragging)return;
+    if(!mapState.dragging||!mapState.startCenterWorld)return;
     const dx=event.clientX-mapState.startX;
     const dy=event.clientY-mapState.startY;
     if(Math.abs(dx)+Math.abs(dy)>5)mapState.moved=true;
@@ -644,14 +724,19 @@ function initialiseMapInteractions(){
 
   const endPointer=event=>{
     mapState.pointers.delete(event.pointerId);
-    if(mapState.pointers.size<2)mapState.pinchDistance=null;
+    if(mapState.pointers.size<2)mapState.pinchOrigin=null;
+    if(mapState.pointers.size===1){
+      const pt=[...mapState.pointers.values()][0];
+      mapState.dragging=true;
+      mapState.moved=true;
+      mapState.startX=pt.x;
+      mapState.startY=pt.y;
+      mapState.startCenterWorld=latLonToWorld(mapState.centerLat,mapState.centerLon,mapState.zoom);
+    }
     if(mapState.pointers.size===0){
       mapState.dragging=false;
+      mapState.startCenterWorld=null;
       map.classList.remove('dragging');
-      if(!mapState.moved&&!event.target.closest('.map-marker,.marker-details')){
-        selectedMarkerId=null;
-        renderMap();
-      }
     }
   };
   map.addEventListener('pointerup',endPointer);
@@ -659,14 +744,17 @@ function initialiseMapInteractions(){
 
   map.addEventListener('wheel',event=>{
     event.preventDefault();
-    stopMapAnimation();
+    if(mapAnimationFrame)stopMapAnimation();
+    hideMarkerPopup(true);
     const delta=event.deltaMode===1?event.deltaY*16:event.deltaMode===2?event.deltaY*100:event.deltaY;
-    if(zoomMapAroundPointer(mapState,map,mapState.zoom-clamp(delta,-200,200)*.003,event))renderMap();
+    smoothZoomAtPointer(clamp(delta,-160,160),event);
   },{passive:false});
 
   map.addEventListener('dblclick',event=>{
     event.preventDefault();
-    if(zoomMapAroundPointer(mapState,map,mapState.zoom+.65,event))renderMap();
+    stopMapAnimation();
+    hideMarkerPopup(true);
+    smoothZoomAtPointer(-280,event);
   });
 
   $('markerLayer').addEventListener('click',event=>{
@@ -678,11 +766,6 @@ function initialiseMapInteractions(){
     if(marker)animateMapTo(marker.latitude,marker.longitude);
     else renderMap();
   });
-
-  $('markerDetails').addEventListener('click',event=>{
-    if(event.target.closest('[data-water-nav]'))startWaterNavigation(selectedMarkerId);
-  });
-
 }
 
 function startLocationTracking(){
@@ -692,13 +775,14 @@ function startLocationTracking(){
     const fresh={lat:position.coords.latitude,lon:position.coords.longitude,accuracy:position.coords.accuracy};
     const first=!currentLocation;
     const movedKm=first?Infinity:distanceKm(currentLocation.lat,currentLocation.lon,fresh.lat,fresh.lon);
+    const accuracyChanged=first||Math.abs((currentLocation.accuracy??0)-(fresh.accuracy??0))>=1;
     currentLocation=fresh;
     if(first){
       mapState.centerLat=fresh.lat;
       mapState.centerLon=fresh.lon;
       mapState.zoom=Math.max(mapState.zoom,15);
       renderMap();
-    }else if(movedKm>=0.002||navigationWaterId){
+    }else if(movedKm>=0.002||accuracyChanged||navigationWaterId){
       renderMap();
     }
   },()=>{}, {enableHighAccuracy:true,maximumAge:2500,timeout:15000});
@@ -726,13 +810,13 @@ function startOrientationListener(){
       if(Number.isFinite(event.webkitCompassAccuracy) && event.webkitCompassAccuracy>=0){
         currentHeadingAccuracy=event.webkitCompassAccuracy;
       }else{
-        currentHeadingAccuracy=event.absolute===true?18:35;
+        currentHeadingAccuracy=null;
       }
       const now=performance.now();
       if(now-lastHeadingRenderAt>=33){
         lastHeadingRenderAt=now;
-        const cone=$('locationCone');
-        if(cone&&!cone.classList.contains('hidden'))cone.style.transform=`rotate(${currentHeading}deg)`;
+        const bearing=$('locationBearing');
+        if(bearing&&!bearing.classList.contains('hidden'))bearing.style.transform=`translate(-50%,-50%) rotate(${currentHeading}deg)`;
       }
     }
   },true);
@@ -792,22 +876,6 @@ async function recenterCurrentLocation(){
   mapState.centerLat=location.lat;
   mapState.centerLon=location.lon;
   mapState.zoom=Math.max(mapState.zoom,15);
-  renderMap();
-}
-
-async function startWaterNavigation(markerId){
-  const marker=currentMarkers.find(m=>m.id===markerId&&m.markerType==='water');
-  if(!marker)return;
-  navigationWaterId=marker.id;
-  selectedMarkerId=marker.id;
-  closeMenu();
-  const location=await ensureCurrentLocation();
-  if(location){
-    fitMapToPoints([
-      {lat:location.lat,lon:location.lon},
-      {lat:marker.latitude,lon:marker.longitude}
-    ]);
-  }
   renderMap();
 }
 
@@ -902,12 +970,13 @@ async function fetchSnapshot(){
   return validateSnapshot(raw,activeAccess);
 }
 
-function geometryDiffers(state,snapshot){
-  const near=(a,b)=>a===null&&b===null||Number.isFinite(a)&&Number.isFinite(b)&&Math.abs(a-b)<1e-9;
-  return state.scopeType!==snapshot.scopeType||!near(state.centerLatitude,snapshot.centerLatitude)||!near(state.centerLongitude,snapshot.centerLongitude)||!near(state.radiusKm,snapshot.radiusKm);
+function snapshotContentKey(snapshot){
+  // Server-generated timestamp changes on every request, even with no edits.
+  const {generatedAt,...content}=snapshot;
+  return JSON.stringify(content);
 }
 
-async function heartbeat({force=false,forceSnapshot=false}={}){
+async function heartbeat({force=false}={}){
   if(!activeAccess||heartbeatRunning)return;
   if(!force&&Date.now()-lastHeartbeatAt<5000)return;
   heartbeatRunning=true;
@@ -935,10 +1004,12 @@ async function heartbeat({force=false,forceSnapshot=false}={}){
     updateCountdown();
     updateMenuMeta();
 
-    const needsSnapshot=forceSnapshot||!currentSnapshot||currentSnapshot.versionNo!==state.versionNo||currentSnapshot.districtId!==state.districtId||geometryDiffers(state,currentSnapshot);
-    if(needsSnapshot){
-      const fresh=await fetchSnapshot();
-      if(fresh){
+    // Fire Points may change without incrementing district_data_versions.
+    // Always check the snapshot on each short poll; do not gate it on version_no.
+    const fresh=await fetchSnapshot();
+    if(fresh){
+      const changed=!currentSnapshot||snapshotContentKey(fresh)!==snapshotContentKey(currentSnapshot);
+      if(changed){
         await saveSnapshotAtomic(fresh);
         currentSnapshot=fresh;
         currentMarkers=fresh.markers;
@@ -954,10 +1025,12 @@ async function heartbeat({force=false,forceSnapshot=false}={}){
         selectedMarkerId=currentMarkers.some(m=>m.id===selectedMarkerId)?selectedMarkerId:null;
         navigationWaterId=currentMarkers.some(m=>m.id===navigationWaterId&&m.markerType==='water')?navigationWaterId:null;
         renderMap();
-      }
-    }else{
-      renderMap();
+      }else renderMap();
     }
+  }catch(error){
+    // No transient RPC, cache or malformed-data error may stop future polls.
+    console.warn('FireSector sync failed:',error);
+    showOfflineBadge(true);
   }finally{
     heartbeatRunning=false;
   }
@@ -968,8 +1041,8 @@ function scheduleHeartbeat(){
   if(!activeAccess)return;
   const delay=HEARTBEAT_BASE_MS+Math.floor(Math.random()*HEARTBEAT_JITTER_MS);
   heartbeatTimer=setTimeout(async()=>{
-    await heartbeat();
-    scheduleHeartbeat();
+    try{await heartbeat();}
+    finally{scheduleHeartbeat();}
   },delay);
 }
 
@@ -995,7 +1068,7 @@ async function openAccess(access){
   startLocationTracking();
   startOrientationListener();
   loadFarmBoundaries();
-  await heartbeat({force:true,forceSnapshot:true});
+  await heartbeat({force:true});
   scheduleHeartbeat();
 }
 
@@ -1012,6 +1085,8 @@ async function endTemporaryAccess(serverEnded=false){
   markerNodes.clear();
   selectedMarkerId=null;
   navigationWaterId=null;
+  stopMapAnimation();
+  hideMarkerPopup(true);
   await clearStoredState();
   closeMenu();
   setScreen(false);
@@ -1107,7 +1182,7 @@ function initialiseUi(){
   window.addEventListener('online',()=>{
     online=true;
     showOfflineBadge(false);
-    heartbeat({force:true,forceSnapshot:currentMarkers.length===0});
+    heartbeat({force:true});
   });
   window.addEventListener('offline',()=>{
     online=false;
@@ -1121,7 +1196,7 @@ function initialiseUi(){
     }
   });
   window.addEventListener('focus',()=>{
-    if(activeAccess)heartbeat({force:true,forceSnapshot:currentMarkers.length===0});
+    if(activeAccess)heartbeat({force:true});
   });
 }
 
