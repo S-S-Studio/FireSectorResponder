@@ -1,8 +1,8 @@
-/* FireSector Responder PWA v009 */
+/* FireSector Responder PWA v010 */
 const SUPABASE_URL='https://gekvveymihsskkuxgxve.supabase.co';
 const SUPABASE_KEY='sb_publishable_nU5RxgAg5gq0Gr53Fb-F_w_Z6_dS3qe';
-const HEARTBEAT_BASE_MS=8000;
-const HEARTBEAT_JITTER_MS=750;
+const HEARTBEAT_BASE_MS=5000;
+const HEARTBEAT_JITTER_MS=250;
 const REQUEST_TIMEOUT_MS=10000;
 const DB_NAME='firesector_responder';
 const DB_VERSION=1;

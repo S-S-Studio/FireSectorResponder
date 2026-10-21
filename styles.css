@@ -69,9 +69,7 @@ input::selection{background:#dbeafe;color:#202124}
 .map-marker.gate{--pin:#202124;--pin-outline:#050505;--icon:#111111}
 .map-marker.gate .pin-core svg{width:30px;height:26px}
 .map-marker.landmark{--pin:#1f6b3a;--pin-outline:#124425;--icon:#1f6b3a}
-.map-marker.fire{width:82px;height:92px;--pin:#f57c00;--pin-outline:#e65100;--icon:#f57c00;filter:drop-shadow(0 3px 3px rgba(0,0,0,.22))}
-.map-marker.fire::before{left:25.5px;top:45px;width:31px;height:42px}
-.map-marker.fire .pin-head{left:18.5px;top:8.5px}
+.map-marker.fire{--pin:#f57c00;--pin-outline:#e65100;--icon:#f57c00;filter:drop-shadow(0 3px 3px rgba(0,0,0,.22))}
 .map-marker.fire .pin-head::before{content:"";position:absolute;inset:-4px;border-radius:50%;background:rgba(245,124,0,.28);animation:fire-pulse 1.45s ease-out infinite;z-index:-1}
 .map-marker.selected{z-index:32}
 .map-marker.selected .pin-head{border-width:3px}
