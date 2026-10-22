@@ -1,4 +1,4 @@
-/* FireSector Responder PWA v010 */
+/* FireSector Responder PWA v011 */
 const SUPABASE_URL='https://gekvveymihsskkuxgxve.supabase.co';
 const SUPABASE_KEY='sb_publishable_nU5RxgAg5gq0Gr53Fb-F_w_Z6_dS3qe';
 const HEARTBEAT_BASE_MS=5000;
