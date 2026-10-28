@@ -102,13 +102,13 @@ async function rpc(name,payload){
 }
 
 async function validateCode(code){
-  const response=await rpc('validate_temporary_access_code',{
+  const response=await rpc('firesector_responder_v2_login',{
     p_code:code,
     p_device_id_hash:null,
     p_user_agent:'FireSector Responder PWA'
   });
   if(!response.reached)throw new Error('Unable to connect to FireSector.');
-  const row=Array.isArray(response.body)?response.body[0]:null;
+  const row=Array.isArray(response.body)?response.body[0]:response.body;
   if(!row?.session_token)throw new Error('Invalid or expired access code.');
   return {
     sessionId:String(row.session_id||''),
@@ -118,6 +118,7 @@ async function validateCode(code){
     districtCode:String(row.district_code||''),
     areaName:String(row.district_name||'FireSector'),
     scopeType:String(row.scope_type||'district').toLowerCase(),
+    accessAreas:normaliseAccessAreas(row.access_areas),
     centerLatitude:toNumber(row.center_latitude),
     centerLongitude:toNumber(row.center_longitude),
     radiusKm:toNumber(row.radius_km),
@@ -132,6 +133,25 @@ function toNumber(value){
   return Number.isFinite(n)?n:null;
 }
 
+function normaliseAccessAreas(raw){
+  if(!Array.isArray(raw))return [];
+  return raw.map(area=>({
+    id:String(area?.id||area?.admin_session_id||''),
+    scopeType:String(area?.scope_type||'').toLowerCase(),
+    centerLatitude:toNumber(area?.center_latitude),
+    centerLongitude:toNumber(area?.center_longitude),
+    radiusKm:toNumber(area?.radius_km),
+    expiresAt:area?.expires_at||null
+  })).filter(area=>area.id&&(
+    area.scopeType==='district'||(area.scopeType==='radius'&&
+    area.centerLatitude!==null&&Math.abs(area.centerLatitude)<=90&&
+    area.centerLongitude!==null&&Math.abs(area.centerLongitude)<=180&&
+    area.radiusKm!==null&&area.radiusKm>0)));
+}
+function insideAccessAreas(areas,latitude,longitude){
+  return areas.some(area=>area.scopeType==='district'||(
+    area.scopeType==='radius'&&distanceKm(area.centerLatitude,area.centerLongitude,latitude,longitude)<=area.radiusKm+0.01));
+}
 function validateSnapshot(raw,access){
   if(!raw||typeof raw!=='object')throw new Error('Invalid map snapshot.');
   const districtId=String(raw.district_id||'');
@@ -141,11 +161,13 @@ function validateSnapshot(raw,access){
   if(!districtId||!accessCodeId||!Number.isInteger(versionNo)||versionNo<0)throw new Error('Invalid map snapshot.');
   if(access&&access.districtId&&districtId!==access.districtId)throw new Error('Map snapshot does not match access.');
   if(access&&access.accessCodeId&&accessCodeId!==access.accessCodeId)throw new Error('Map snapshot does not match incident.');
-  if(!['district','radius'].includes(scopeType))throw new Error('Invalid map scope.');
+  if(!['district','radius','multi'].includes(scopeType))throw new Error('Invalid map scope.');
   const centerLatitude=toNumber(raw.center_latitude);
   const centerLongitude=toNumber(raw.center_longitude);
   const radiusKm=toNumber(raw.radius_km);
   if(scopeType==='radius'&&(centerLatitude===null||centerLongitude===null||radiusKm===null||radiusKm<=0))throw new Error('Invalid access radius.');
+  const accessAreas=normaliseAccessAreas(raw.access_areas);
+  if(scopeType==='multi'&&(!Array.isArray(raw.access_areas)||accessAreas.length!==raw.access_areas.length||!accessAreas.length))throw new Error('Invalid access areas.');
   if(!Array.isArray(raw.markers))throw new Error('Map markers are missing.');
   const ids=new Set();
   const markers=raw.markers.map(item=>{
@@ -156,6 +178,7 @@ function validateSnapshot(raw,access){
     if(!id||ids.has(id)||!['water','gate','landmark','fire'].includes(markerType)||latitude===null||longitude===null||latitude<-90||latitude>90||longitude<-180||longitude>180)throw new Error('Invalid marker data.');
     ids.add(id);
     if(scopeType==='radius'&&distanceKm(centerLatitude,centerLongitude,latitude,longitude)>radiusKm+0.01)throw new Error('Marker outside access radius.');
+    if(scopeType==='multi'&&!insideAccessAreas(accessAreas,latitude,longitude))throw new Error('Marker outside access areas.');
     return {
       id,markerType,
       name:cleanText(item.name)||markerTypeLabel(markerType),
@@ -191,7 +214,7 @@ function validateSnapshot(raw,access){
     versionNo,
     versionUpdatedAt:cleanText(raw.version_updated_at),
     generatedAt:cleanText(raw.generated_at),
-    scopeType,centerLatitude,centerLongitude,radiusKm,
+    scopeType,centerLatitude,centerLongitude,radiusKm,accessAreas,
     expiresAt:cleanText(raw.expires_at),
     markers,
     farms
@@ -205,14 +228,16 @@ function validateStoredSnapshot(snapshot,access){
   if(!snapshot.districtId||!snapshot.accessCodeId||!Number.isInteger(snapshot.versionNo)||snapshot.versionNo<0)throw new Error('Invalid stored map snapshot.');
   if(access?.districtId&&snapshot.districtId!==access.districtId)throw new Error('Stored map does not match access.');
   if(access?.accessCodeId&&snapshot.accessCodeId!==access.accessCodeId)throw new Error('Stored map does not match incident.');
-  if(!['district','radius'].includes(snapshot.scopeType))throw new Error('Invalid stored map scope.');
+  if(!['district','radius','multi'].includes(snapshot.scopeType))throw new Error('Invalid stored map scope.');
   if(snapshot.scopeType==='radius'&&(!Number.isFinite(snapshot.centerLatitude)||!Number.isFinite(snapshot.centerLongitude)||!Number.isFinite(snapshot.radiusKm)||snapshot.radiusKm<=0))throw new Error('Invalid stored access radius.');
+  if(snapshot.scopeType==='multi'&&(!Array.isArray(snapshot.accessAreas)||!snapshot.accessAreas.length))throw new Error('Invalid stored access areas.');
   if(!Array.isArray(snapshot.markers)||!Array.isArray(snapshot.farms))throw new Error('Invalid stored map data.');
   const ids=new Set();
   for(const marker of snapshot.markers){
     if(!marker||typeof marker.id!=='string'||!marker.id||ids.has(marker.id)||!['water','gate','landmark','fire'].includes(marker.markerType)||!Number.isFinite(marker.latitude)||!Number.isFinite(marker.longitude)||Math.abs(marker.latitude)>90||Math.abs(marker.longitude)>180)throw new Error('Invalid stored marker.');
     ids.add(marker.id);
     if(snapshot.scopeType==='radius'&&distanceKm(snapshot.centerLatitude,snapshot.centerLongitude,marker.latitude,marker.longitude)>snapshot.radiusKm+0.01)throw new Error('Stored marker outside access radius.');
+    if(snapshot.scopeType==='multi'&&!insideAccessAreas(snapshot.accessAreas,marker.latitude,marker.longitude))throw new Error('Stored marker outside access areas.');
   }
   return snapshot;
 }
@@ -913,7 +938,7 @@ function stopWaterNavigation(){
 function updateCountdown(){
   if(!activeAccess?.expiresAt){$('countdown').textContent='—';return;}
   const remaining=new Date(activeAccess.expiresAt).getTime()-Date.now();
-  if(remaining<=0){endTemporaryAccess(true);return;}
+  if(remaining<=0){$('countdown').textContent='Checking access...';heartbeat({force:true});return;}
   const total=Math.floor(remaining/1000);
   const days=Math.floor(total/86400);
   const hours=Math.floor((total%86400)/3600);
@@ -941,25 +966,26 @@ function showOfflineBadge(show){
 }
 
 async function getVersionState(){
-  const response=await rpc('get_firesector_map_data_version',{p_session_token:activeAccess.sessionToken});
+  const response=await rpc('firesector_responder_v2_sync',{p_session_token:activeAccess.sessionToken});
   if(!response.reached)return {reached:false};
-  const row=Array.isArray(response.body)?response.body[0]:null;
-  if(!row)return {reached:true,active:false};
+  const row=Array.isArray(response.body)?response.body[0]:response.body;
+  if(!row||row.is_active!==true)return {reached:true,active:false};
   return {
     reached:true,active:true,
     versionNo:Number(row.version_no),
     districtId:String(row.district_id||''),
     areaName:String(row.district_name||activeAccess.areaName||'FireSector'),
     scopeType:String(row.scope_type||activeAccess.scopeType||'district').toLowerCase(),
-    centerLatitude:toNumber(row.center_latitude),
-    centerLongitude:toNumber(row.center_longitude),
-    radiusKm:toNumber(row.radius_km),
-    expiresAt:row.expires_at||activeAccess.expiresAt
+    centerLatitude:toNumber(row.center_latitude??activeAccess.centerLatitude),
+    centerLongitude:toNumber(row.center_longitude??activeAccess.centerLongitude),
+    radiusKm:toNumber(row.radius_km??activeAccess.radiusKm),
+    accessAreas:row.access_areas?normaliseAccessAreas(row.access_areas):activeAccess.accessAreas||[],
+    expiresAt:row.effective_expires_at||activeAccess.expiresAt
   };
 }
 
 async function fetchSnapshot(){
-  const response=await rpc('get_firesector_map_data_snapshot',{p_session_token:activeAccess.sessionToken});
+  const response=await rpc('firesector_responder_v2_snapshot',{p_session_token:activeAccess.sessionToken});
   if(!response.reached)return null;
   let raw=response.body;
   if(Array.isArray(raw)&&raw.length===1&&raw[0]&&typeof raw[0]==='object')raw=raw[0];
@@ -998,6 +1024,7 @@ async function heartbeat({force=false}={}){
       centerLatitude:state.centerLatitude,
       centerLongitude:state.centerLongitude,
       radiusKm:state.radiusKm,
+      accessAreas:state.accessAreas,
       expiresAt:state.expiresAt
     };
     await saveSession(activeAccess);
@@ -1007,6 +1034,7 @@ async function heartbeat({force=false}={}){
     // Fire Points may change without incrementing district_data_versions.
     // Always check the snapshot on each short poll; do not gate it on version_no.
     const fresh=await fetchSnapshot();
+    if(!fresh){showOfflineBadge(true);return;}
     if(fresh){
       const changed=!currentSnapshot||snapshotContentKey(fresh)!==snapshotContentKey(currentSnapshot);
       if(changed){
@@ -1020,6 +1048,7 @@ async function heartbeat({force=false}={}){
           centerLatitude:fresh.centerLatitude,
           centerLongitude:fresh.centerLongitude,
           radiusKm:fresh.radiusKm,
+          accessAreas:fresh.accessAreas,
           expiresAt:fresh.expiresAt||activeAccess.expiresAt
         };
         selectedMarkerId=currentMarkers.some(m=>m.id===selectedMarkerId)?selectedMarkerId:null;
@@ -1048,12 +1077,16 @@ function scheduleHeartbeat(){
 
 async function openAccess(access){
   activeAccess=access;
-  currentSnapshot=await loadSnapshot(access);
+  currentSnapshot=null; // Server must revalidate access before any cached markers display.
   currentMarkers=currentSnapshot?.markers||[];
   farmGeometry=Array.isArray(currentSnapshot?.farms)?currentSnapshot.farms.filter(farm=>farm?.private===true&&farm?.geometry):[];
   if(currentSnapshot){
-    mapState.centerLat=currentSnapshot.scopeType==='radius'&&currentSnapshot.centerLatitude!==null?currentSnapshot.centerLatitude:mapState.centerLat;
-    mapState.centerLon=currentSnapshot.scopeType==='radius'&&currentSnapshot.centerLongitude!==null?currentSnapshot.centerLongitude:mapState.centerLon;
+    mapState.centerLat=currentSnapshot.scopeType==='radius'&&currentSnapshot.centerLatitude!==null?currentSnapshot.centerLatitude:currentSnapshot.scopeType==='multi'&&currentSnapshot.accessAreas?.[0]?.centerLatitude!==null&&currentSnapshot.accessAreas?.[0]?.centerLatitude!==undefined?currentSnapshot.accessAreas[0].centerLatitude:mapState.centerLat;
+    mapState.centerLon=currentSnapshot.scopeType==='radius'&&currentSnapshot.centerLongitude!==null?currentSnapshot.centerLongitude:currentSnapshot.scopeType==='multi'&&currentSnapshot.accessAreas?.[0]?.centerLongitude!==null&&currentSnapshot.accessAreas?.[0]?.centerLongitude!==undefined?currentSnapshot.accessAreas[0].centerLongitude:mapState.centerLon;
+  }else if(access.scopeType==='multi'&&access.accessAreas?.some(a=>a.scopeType==='radius')){
+    const first=access.accessAreas.find(a=>a.scopeType==='radius');
+    mapState.centerLat=first.centerLatitude;
+    mapState.centerLon=first.centerLongitude;
   }else if(access.scopeType==='radius'&&access.centerLatitude!==null&&access.centerLongitude!==null){
     mapState.centerLat=access.centerLatitude;
     mapState.centerLon=access.centerLongitude;
@@ -1271,7 +1304,8 @@ async function loadStoredSession(){
     const stored=await dbGet('active-session');
     const access=stored?.access;
     if(!access?.sessionToken||!access?.expiresAt)return null;
-    if(new Date(access.expiresAt).getTime()<=Date.now())return null;
+    // Do not trust local expiry as final: an Admin may have extended the shared code.
+    // Server-side sync decides whether access is still valid.
     return access;
   }catch(_){return null;}
 }

@@ -1,4 +1,4 @@
-const APP_CACHE='firesector-responder-shell-v011';
+const APP_CACHE='firesector-responder-shell-v012';
 // Preserve previously downloaded tiles for offline map use across app updates.
 const TILE_CACHE='firesector-responder-tiles-v008';
 const MAX_TILE_ENTRIES=320;
